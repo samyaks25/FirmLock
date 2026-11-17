@@ -2,6 +2,7 @@
 
 from app.schemas.alert import AlertListResponse, AlertResponse, AlertSummary, AlertUpdate
 from app.schemas.asset import AssetCreate, AssetResponse, AssetUpdate, normalize_domain
+from app.schemas.auth import Token, UserCreate, UserLogin, UserResponse
 from app.schemas.business import BusinessCreate, BusinessResponse
 from app.schemas.risk import (
     AssetRiskResponse,
@@ -33,4 +34,8 @@ __all__ = [
     "RiskAssessmentResponse",
     "RiskHistoryEntry",
     "AssetRiskResponse",
+    "UserCreate",
+    "UserLogin",
+    "Token",
+    "UserResponse",
 ]

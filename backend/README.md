@@ -20,40 +20,47 @@ backend/
 │   ├── api/
 │   │   ├── __init__.py
 │   │   ├── router.py
+│   │   ├── deps.py                  # auth dependencies (get_current_user)
 │   │   └── routes/
 │   │       ├── __init__.py
+│   │       ├── auth.py              # register, login, /me
 │   │       ├── businesses.py
 │   │       ├── assets.py
 │   │       ├── scans.py
 │   │       ├── risk.py
-│   │       └── alerts.py          # alert list/detail/update/summary
+│   │       └── alerts.py
 │   ├── core/
 │   │   ├── __init__.py
-│   │   └── config.py
+│   │   ├── config.py
+│   │   ├── auth.py                  # JWT create/decode
+│   │   └── security.py              # Argon2 hash/verify/validate
 │   ├── database/
 │   │   ├── __init__.py
 │   │   └── connection.py
 │   ├── models/
 │   │   ├── __init__.py
-│   │   └── models.py
+│   │   └── models.py                # User, BusinessMembership added
 │   ├── schemas/
 │   │   ├── __init__.py
+│   │   ├── auth.py                  # UserCreate, UserLogin, Token, UserResponse
 │   │   ├── business.py
 │   │   ├── asset.py
 │   │   ├── scan.py
 │   │   ├── risk.py
-│   │   ├── alert.py               # alert response/update/list/summary schemas
-│   │   ├── report.py              # scan and asset report schemas
-│   │   └── dashboard.py           # dashboard response schemas
+│   │   ├── alert.py
+│   │   ├── report.py
+│   │   └── dashboard.py
 │   └── services/
 │       ├── __init__.py
+│       ├── auth_service.py          # registration, login, user lookup
+│       ├── membership_service.py    # membership CRUD, role checks, permissions
 │       ├── business_service.py
 │       ├── asset_service.py
 │       ├── risk_config.py
 │       ├── risk_service.py
-│       ├── alert_service.py       # alert generation and lifecycle
-│       ├── report_service.py      # scan/CSV/historical reports
-│       ├── dashboard_service.py   # business dashboard aggregation
+│       ├── alert_service.py
+│       ├── report_service.py
+│       ├── dashboard_service.py
 │       └── scanner/
 │           ├── __init__.py
 │           ├── config.py
@@ -68,6 +75,10 @@ backend/
 │           └── scan_manager.py
 ├── data/
 ├── tests/
+│   ├── conftest.py                  # pytest fixtures (test_db, db_session, client)
+│   ├── test_auth.py                 # 25 tests: register, login, tokens, /me
+│   ├── test_authz.py                # 18 tests: RBAC matrix, cross-tenant isolation
+│   ├── test_auth_helpers.py         # 9 tests: security/membership service units
 │   ├── test_api.py
 │   ├── test_database.py
 │   ├── test_business_asset_api.py
@@ -81,6 +92,7 @@ backend/
 │   ├── test_reports_api.py
 │   └── test_dashboard_api.py
 ├── requirements.txt
+├── requirements-dev.txt
 └── README.md
 ```
 
@@ -98,6 +110,8 @@ backend/
 
 | Model | Key fields | Constraints/notes |
 |---|---|---|
+| **User** | `id`, `email` (unique), `full_name`, `hashed_password`, `is_active`, `created_at` | Email unique index; password min 12 chars (Argon2id) |
+| **BusinessMembership** | `id`, `business_id` (FK), `user_id` (FK), `role` (`owner`/`admin`/`analyst`/`viewer`), `joined_at` | Unique `(business_id, user_id)`; role check constraint |
 | **Business** | `id`, `name` (required), `industry` (optional), `created_at`, `updated_at` (UTC) | Root tenant-like entity for MVP |
 | **Asset** | `id`, `business_id` (FK), `domain`, `authorization_confirmed`, `authorization_confirmed_at`, `monitoring_enabled` (default true), `status` (`active`/`paused`), `last_scanned_at`, timestamps | Unique `(business_id, domain)`; status check; authorization is a user attestation, **not** proof of ownership |
 | **Scan** | `id`, `asset_id` (FK), `status` (`pending/running/completed/failed`), `security_score` (0–100, nullable), `started_at`, `completed_at`, `created_at` | Score/status checks. `security_score` is written once when the scan is assessed and is never overwritten |
@@ -108,6 +122,9 @@ backend/
 
 ## Relationships
 
+- `User 1—* BusinessMembership` (`business_memberships`, `user`)
+- `Business 1—* BusinessMembership` (`memberships`, `business`; cascade delete)
+- `Business *—* User` via `BusinessMembership` (`members`, `business_memberships`; association proxy)
 - `Business 1—* Asset` (`assets`, `business`)
 - `Asset 1—* Scan` (`scans`, `asset`)
 - `Scan 1—* Finding` (`findings`, `scan`)
@@ -507,6 +524,10 @@ Settings live in `app/core/config.py` (no secrets in source).
 | `FIRMLOCK_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Allowed CORS origins (comma-separated) |
 | `FIRMLOCK_DATABASE_URL` | `sqlite:///<backend>/data/firmlock.db` | Database URL (configurable; no credentials) |
 | `FIRMLOCK_DATA_DIR` | `<backend>/data` | Data directory (auto-created) |
+| `FIRMLOCK_JWT_SECRET` | **required** | HS256 JWT signing key (min 32 chars recommended) |
+| `FIRMLOCK_JWT_ALGORITHM` | `HS256` | JWT algorithm |
+| `FIRMLOCK_ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | Access token lifetime |
+| `FIRMLOCK_PASSWORD_MIN_LENGTH` | `12` | Minimum password length |
 | `FIRMLOCK_SCORE_PENALTY_CRITICAL` | `25` | Points deducted per critical finding |
 | `FIRMLOCK_SCORE_PENALTY_HIGH` | `15` | Points deducted per high finding |
 | `FIRMLOCK_SCORE_PENALTY_MEDIUM` | `8` | Points deducted per medium finding |
@@ -538,7 +559,7 @@ python -m pip install -r requirements.txt
 
 If activation is blocked: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
 
-Dependencies (`requirements.txt`): `fastapi`, `uvicorn[standard]`, `pydantic`, `sqlalchemy`, `dnspython` (DNS/SPF/DMARC/CAA lookups). No new dependencies were added for the risk assessment engine; it uses the existing stack.
+Dependencies (`requirements.txt`): `fastapi`, `uvicorn[standard]`, `pydantic`, `sqlalchemy`, `dnspython` (DNS/SPF/DMARC/CAA lookups), `argon2-cffi`, `python-jose[cryptography]`, `passlib[argon2]`, `email-validator`.
 
 Testing dependency (`requirements-dev.txt`): `httpx` (required by FastAPI/Starlette `TestClient`), plus all production requirements.
 
@@ -564,27 +585,30 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 |---|---|---|---|---|
 | GET | `/` | Welcome message | 200 | — |
 | GET | `/api/health` | Health/service/version/environment | 200 | — |
-| POST | `/api/businesses` | Create business | 201 | 422 validation |
-| GET | `/api/businesses` | List businesses | 200 | — |
-| GET | `/api/businesses/{business_id}` | Get business | 200 | 404 not found |
-| GET | `/api/businesses/{business_id}/dashboard` | Business dashboard summary | 200 | 404 business |
-| POST | `/api/businesses/{business_id}/assets` | Register authorised website | 201 | 404 business, 409 duplicate domain, 422 validation |
-| GET | `/api/businesses/{business_id}/assets` | List assets for business | 200 | 404 business |
-| GET | `/api/assets/{asset_id}` | Get asset | 200 | 404 not found |
-| PATCH | `/api/assets/{asset_id}` | Update monitoring status (`status`, `monitoring_enabled`) | 200 | 404, 422 |
-| GET | `/api/assets/{asset_id}/reports` | Historical scan report summaries for an asset | 200 | 404 asset |
-| POST | `/api/assets/{asset_id}/scan` | Queue a read-only security scan for an authorised, active asset | 202 | 404 asset, 403 unauthorised/paused/monitoring-off |
-| GET | `/api/scans/{scan_id}` | Get a scan and its findings | 200 | 404 not found |
-| GET | `/api/scans/{scan_id}/report` | Structured scan security report | 200 | 404 scan/asset |
-| GET | `/api/scans/{scan_id}/report.csv` | Download scan findings as CSV | 200 | 404 scan/asset |
-| GET | `/api/assets/{asset_id}/scans` | List scan history for an asset | 200 | 404 asset |
-| GET | `/api/scans/{scan_id}/risk` | Risk assessment for a scan | 200 | 404 not found |
-| GET | `/api/assets/{asset_id}/risk` | Latest completed scan's risk assessment for an asset | 200 | 404 asset, 404 no completed scan |
-| GET | `/api/assets/{asset_id}/risk/history` | Completed-scan risk assessment history (newest first) | 200 | 404 asset |
-| GET | `/api/businesses/{business_id}/alerts` | List business alerts (filters/pagination) | 200 | 404 business, 422 invalid filter |
-| GET | `/api/alerts/{alert_id}` | Retrieve alert details | 200 | 404 not found |
-| PATCH | `/api/alerts/{alert_id}` | Mark alert read or resolve | 200 | 404, 422 invalid update |
-| GET | `/api/businesses/{business_id}/alerts/summary` | Alert summary counts | 200 | 404 business |
+| POST | `/api/auth/register` | Register new user | 201 | 422 validation, 409 email exists |
+| POST | `/api/auth/login` | Obtain JWT (form-encoded) | 200 | 401 invalid credentials |
+| GET | `/api/auth/me` | Current user profile | 200 | 401 missing/invalid token |
+| POST | `/api/businesses` | Create business (becomes owner) | 201 | 401, 422 validation |
+| GET | `/api/businesses` | List user's businesses | 200 | 401 |
+| GET | `/api/businesses/{business_id}` | Get business (member only) | 200 | 401, 403 not member, 404 |
+| GET | `/api/businesses/{business_id}/dashboard` | Business dashboard (member only) | 200 | 401, 403, 404 |
+| POST | `/api/businesses/{business_id}/assets` | Register authorised website (analyst+) | 201 | 401, 403, 404 business, 409 duplicate, 422 |
+| GET | `/api/businesses/{business_id}/assets` | List assets (member only) | 200 | 401, 403, 404 |
+| GET | `/api/assets/{asset_id}` | Get asset (member of business) | 200 | 401, 403, 404 |
+| PATCH | `/api/assets/{asset_id}` | Update monitoring (analyst+) | 200 | 401, 403, 404, 422 |
+| GET | `/api/assets/{asset_id}/reports` | Historical scan reports (member only) | 200 | 401, 403, 404 |
+| POST | `/api/assets/{asset_id}/scan` | Queue scan (analyst+) | 202 | 401, 403, 404, 403 unauth/paused/off |
+| GET | `/api/scans/{scan_id}` | Get scan with findings (member) | 200 | 401, 403, 404 |
+| GET | `/api/scans/{scan_id}/report` | Structured scan report (member) | 200 | 401, 403, 404 |
+| GET | `/api/scans/{scan_id}/report.csv` | Download CSV report (member) | 200 | 401, 403, 404 |
+| GET | `/api/assets/{asset_id}/scans` | Scan history (member) | 200 | 401, 403, 404 |
+| GET | `/api/scans/{scan_id}/risk` | Scan risk assessment (member) | 200 | 401, 403, 404 |
+| GET | `/api/assets/{asset_id}/risk` | Latest asset risk (member) | 200 | 401, 403, 404 |
+| GET | `/api/assets/{asset_id}/risk/history` | Asset risk history (member) | 200 | 401, 403, 404 |
+| GET | `/api/businesses/{business_id}/alerts` | List alerts (member, filters/page) | 200 | 401, 403, 404, 422 |
+| GET | `/api/alerts/{alert_id}` | Alert details (member) | 200 | 401, 403, 404 |
+| PATCH | `/api/alerts/{alert_id}` | Mark read/resolve (analyst+) | 200 | 401, 403, 404, 422 |
+| GET | `/api/businesses/{business_id}/alerts/summary` | Alert counts (member) | 200 | 401, 403, 404 |
 
 `PATCH /api/assets/{asset_id}` only updates monitoring fields; it does **not** allow changing business ownership or authorization records. Alert, report and dashboard endpoints are MVP endpoints (no authentication/tenant isolation).
 
@@ -802,30 +826,35 @@ Response `200`: `total_monitored_websites`, `active_websites`, `paused_websites`
 
 ```powershell
 cd backend
-python -m unittest discover -s tests -v
+python -m pytest tests/ -v
 ```
 
 Run with the project virtual environment when dependencies are installed there:
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m pytest tests/ -v
 ```
 
 - `tests/test_api.py`: foundation smoke tests (8) — starts uvicorn on `127.0.0.1:8765`.
-- `tests/test_database.py`: DB connection/tables/FK enforcement and model relationships (isolated temp SQLite).
-- `tests/test_business_asset_api.py`: business/asset API and validation (isolated temp SQLite via `TestClient`; requires `httpx`).
+- `tests/test_database.py`: DB connection/tables/FK enforcement and model relationships (isolated temp SQLite) (18).
+- `tests/test_business_asset_api.py`: business/asset API and validation (isolated temp SQLite via `TestClient`; requires `httpx`) (16).
 - `tests/test_scanner_validators.py`: hostname validation, SSRF/IP safety, DNS resolution + pinning, redirect validation, pinned HTTP transport (37).
 - `tests/test_scanner_inspectors.py`: TLS, HTTPS, header and DNS inspectors with mocked network (28).
 - `tests/test_scan_manager.py`: orchestration, status transitions, failure handling and DB persistence with an isolated temp SQLite DB (10).
 - `tests/test_scan_api.py`: scan endpoints, authorization guards, lifecycle and history via `TestClient` with the network mocked (10).
 - `tests/test_risk_engine.py`: severity penalties, multiple/duplicate findings, minimum score, informational findings, unknown results, failed/incomplete scans, coverage, historical preservation, configurable weights, classification, priorities and scan-manager integration (29).
 - `tests/test_risk_api.py`: scan risk, asset risk, history, previous-score comparison, 404 handling and historical preservation via `TestClient` (12).
-- `tests/test_alerts_api.py`: automatic alert creation, severity classification, info exclusion, duplicate prevention, reappearing resolved issues, read/resolve, filtering, pagination, summary, and 404/422 handling (12).
-- `tests/test_reports_api.py`: scan report generation, findings/recommendations, missing-score handling, CSV export, historical asset reports, and missing-asset/scan handling (8).
+- `tests/test_alerts_api.py`: automatic alert creation, severity classification, info exclusion, duplicate prevention, reappearing resolved issues, read/resolve, filtering, pagination, summary, and 404/422 handling (11).
+- `tests/test_reports_api.py`: scan report generation, findings/recommendations, missing-score handling, CSV export, historical asset reports, and missing-asset/scan handling (9).
 - `tests/test_dashboard_api.py`: dashboard counts, latest scan/overview, alert counts/activity, and empty/missing business handling (3).
+- `tests/test_auth.py`: registration, login, password validation, token flow, current user (25).
+- `tests/test_authz.py`: RBAC matrix, cross-tenant isolation, membership guards (18).
+- `tests/test_auth_helpers.py`: direct security/membership service unit tests (9).
 
-Tests use isolated temporary SQLite databases and must not modify local development data.
+**Total: 234 tests**
+
+Tests use isolated temporary SQLite databases and must not modify local development data. Fixtures in `tests/conftest.py` provide `test_db`, `db_session`, and `client` for per-test isolation, avoiding SQLAlchemy registry conflicts.
 Scanner tests never make real network requests: the resolver, TLS probe, HTTP transport and DNS query functions are injected or patched.
 Risk/report/alert/dashboard tests persist findings and check results directly and never call the network.
 
@@ -840,8 +869,8 @@ Risk/report/alert/dashboard tests persist findings and check results directly an
 
 ## Current security limitations
 
-- **No authentication/authorization:** endpoints are open; no login, sessions, or tokens.
-- **Not multi-tenant safe:** no server-side tenant isolation/authorization; APIs must not be presented as production-ready multi-tenant APIs.
+- **Authentication implemented (Stage 06):** JWT-based auth with Argon2 password hashing, RBAC, and tenant isolation. Tokens expire in 15 minutes.
+- **Not production-ready multi-tenant:** RBAC and isolation are enforced at the application layer; no row-level security, audit logging, or advanced session management.
 - **Authorization is attestation only:** `authorization_confirmed` is a user claim, not independent proof of domain ownership.
 - **No rate limiting/abuse protection, no CSRF controls, no audit logging.**
 - **SQLite for local dev:** not suited for concurrent multi-user production workloads.
@@ -855,9 +884,152 @@ Risk/report/alert/dashboard tests persist findings and check results directly an
 - **Best-effort network assumptions:** a scan reflects a single point-in-time observation from one network vantage point; transient DNS/TLS failures are reported as unknown, not as confirmed vulnerabilities. Redirects are validated but not followed, so multi-hop redirect chains are only partially assessed.
 - **Authorization is attestation only (scanner-relevant):** a scan only verifies the stored `authorization_confirmed` flag; it does not independently prove domain ownership, so the platform relies on the asset registration step for authorization.
 
+## Stage 06: Authentication and Business Access Control
+
+This stage implements user authentication, JWT-based sessions, role-based access control (RBAC), and strict tenant isolation across all business-related APIs.
+
+### Authentication architecture
+
+- **Password hashing:** Argon2id via `passlib[argon2]` with minimum 12-character requirement, enforced at registration.
+- **Tokens:** JWT HS256, 15-minute access token expiry, signed with `FIRMLOCK_JWT_SECRET` (required, no default). Tokens carry `sub` (user ID), `email`, and `exp`.
+- **Auth endpoints:**
+  - `POST /api/auth/register` — create account (`email`, `password`, `full_name`)
+  - `POST /api/auth/login` — obtain JWT (`application/x-www-form-urlencoded` with `username`=`email`, `password`)
+  - `GET /api/auth/me` — current user profile (requires `Authorization: Bearer <token>`)
+- **Dependencies:** `get_current_user` (required) and `get_current_user_optional` (for public endpoints that personalize if authenticated).
+- **Public endpoints unchanged:** `GET /` and `GET /api/health` remain unauthenticated.
+
+### Role-based access control (RBAC)
+
+Business membership links users to businesses with one of four roles:
+
+| Role | Permissions |
+|---|---|
+| `owner` | Full control: manage memberships, delete business, all member/analyst/viewer actions |
+| `admin` | Manage members (except owner), manage assets/scans/alerts, view everything |
+| `analyst` | Create/manage assets, start scans, view scans/risk/reports/alerts, update alert status |
+| `viewer` | Read-only: view assets, scans, risk, reports, alerts, dashboard |
+
+**Role hierarchy:** `owner` > `admin` > `analyst` > `viewer`. Higher roles inherit all lower-role permissions.
+
+### Tenant isolation
+
+- **Business creation:** authenticated user becomes the `owner` automatically (membership created in same transaction).
+- **Business listing (`GET /api/businesses`):** returns only businesses the user is a member of.
+- **All business-scoped endpoints** (`/api/businesses/{business_id}...`, `/api/businesses/{business_id}/assets...`, `/api/assets/{asset_id}...`, `/api/scans...`, `/api/alerts...`, `/api/businesses/{business_id}/dashboard`, etc.) validate membership via `membership_service` before any data access.
+- **Cross-tenant access returns 403** (not 404) to avoid business enumeration; membership checks use boolean `can_*` helpers to avoid 500 errors from exception-throwing guards.
+- **Asset-scoped endpoints** resolve the asset's business and check membership.
+- **Scan/alert/risk/dashboard endpoints** resolve the parent business and enforce membership.
+
+### API changes from Stage 05
+
+All previously open business/asset/scan/alert/risk/report/dashboard endpoints now require `Authorization: Bearer <token>` header.
+
+| Method | Path | Auth required | RBAC notes |
+|---|---|---|---|
+| GET | `/api/businesses` | Yes | Returns user's businesses only |
+| GET | `/api/businesses/{id}` | Yes | Member only |
+| GET | `/api/businesses/{id}/dashboard` | Yes | Member only |
+| POST | `/api/businesses/{id}/assets` | Yes | `analyst`+ |
+| GET | `/api/businesses/{id}/assets` | Yes | Member only |
+| GET | `/api/assets/{id}` | Yes | Member of asset's business |
+| PATCH | `/api/assets/{id}` | Yes | `analyst`+ |
+| POST | `/api/assets/{id}/scan` | Yes | `analyst`+ |
+| GET | `/api/assets/{id}/scans` | Yes | Member only |
+| GET | `/api/scans/{id}` | Yes | Member of scan's business |
+| GET | `/api/scans/{id}/report` | Yes | Member only |
+| GET | `/api/scans/{id}/report.csv` | Yes | Member only |
+| GET | `/api/scans/{id}/risk` | Yes | Member only |
+| GET | `/api/assets/{id}/risk` | Yes | Member only |
+| GET | `/api/assets/{id}/risk/history` | Yes | Member only |
+| GET | `/api/businesses/{id}/alerts` | Yes | Member only |
+| GET | `/api/alerts/{id}` | Yes | Member of alert's business |
+| PATCH | `/api/alerts/{id}` | Yes | `analyst`+ |
+| GET | `/api/businesses/{id}/alerts/summary` | Yes | Member only |
+| GET | `/api/assets/{id}/reports` | Yes | Member only |
+
+**Error responses:** `401` (missing/invalid/expired token), `403` (authenticated but insufficient role or not a member), `404` (resource genuinely not found within accessible scope).
+
+### Membership management (internal)
+
+`app/services/membership_service.py` provides:
+- `add_member(business_id, user_id, role)` — idempotent upsert, prevents duplicate memberships, self-management guards
+- `remove_member(business_id, user_id, actor_id)` — prevents owner self-removal, last-owner protection
+- `get_membership(business_id, user_id)` — returns membership or None
+- `list_memberships(business_id)` — all memberships with user details
+- `list_user_businesses(user_id)` — businesses user belongs to
+- `can_manage_members`, `can_manage_assets`, `can_start_scans`, `can_view_scans`, `can_manage_alerts`, `can_view_alerts`, `can_view_reports`, `can_view_dashboard` — boolean permission checks used by routes
+
+### Database models added
+
+| Model | Key fields | Constraints |
+|---|---|---|
+| **User** | `id`, `email` (unique), `full_name`, `hashed_password`, `is_active`, `created_at` | Email unique index |
+| **BusinessMembership** | `id`, `business_id` (FK), `user_id` (FK), `role` (`owner`/`admin`/`analyst`/`viewer`), `joined_at` | Unique `(business_id, user_id)`, FK cascade, role check constraint |
+
+**Relationships:**
+- `User.business_memberships` → `BusinessMembership`
+- `Business.memberships` → `BusinessMembership` (cascade delete)
+- `Business.members` → association proxy to `User` via memberships
+
+### New environment variables
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `FIRMLOCK_JWT_SECRET` | **Yes** | HS256 signing key (min 32 chars recommended) |
+| `FIRMLOCK_JWT_ALGORITHM` | No (default `HS256`) | JWT algorithm |
+| `FIRMLOCK_ACCESS_TOKEN_EXPIRE_MINUTES` | No (default `15`) | Token lifetime |
+| `FIRMLOCK_PASSWORD_MIN_LENGTH` | No (default `12`) | Minimum password length |
+
+### New dependencies (`requirements.txt`)
+
+- `argon2-cffi` — Argon2id password hashing
+- `python-jose[cryptography]` — JWT encode/decode
+- `passlib[argon2]` — Passlib Argon2 integration
+- `email-validator` — Email syntax validation
+
+### Testing
+
+All 234 tests pass using pytest fixtures in `tests/conftest.py` that provide isolated temporary SQLite databases per test function (`test_db`, `db_session`, `client`), avoiding SQLAlchemy registry conflicts from module reloading.
+
+Key test files:
+- `tests/test_auth.py` — registration, login, password validation, token flow, current user (25 tests)
+- `tests/test_authz.py` — RBAC matrix, cross-tenant isolation, membership guards (18 tests)
+- `tests/test_auth_helpers.py` — direct security/membership service unit tests (9 tests)
+- Remaining test files converted to pytest fixtures (business, asset, scan, risk, alert, report, dashboard, database)
+
+### Example flow
+
+```bash
+# Register
+curl -X POST http://127.0.0.1:8000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"SecurePass123","full_name":"Test User"}'
+
+# Login (form-encoded)
+curl -X POST http://127.0.0.1:8000/api/auth/login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d 'username=user@example.com&password=SecurePass123'
+# → {"access_token":"eyJ...","token_type":"bearer"}
+
+# Use token
+curl -H "Authorization: Bearer eyJ..." http://127.0.0.1:8000/api/businesses
+
+# Create business (becomes owner)
+curl -X POST -H "Authorization: Bearer eyJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Acme Co"}' http://127.0.0.1:8000/api/businesses
+
+# Add team member (owner only)
+curl -X POST -H "Authorization: Bearer eyJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"email":"analyst@example.com","role":"analyst"}' \
+  http://127.0.0.1:8000/api/businesses/1/members
+```
+
 ## Out of scope (future stages)
 
-Authentication/login, password storage, payment systems, email/SMS notifications, scheduled/automated monitoring, PDF reports, machine learning, multi-tenant isolation, and frontend modifications are intentionally not implemented.
+Payment systems, email/SMS notifications, scheduled/automated monitoring, PDF reports, machine learning, and frontend modifications are intentionally not implemented.
 
 ## Running the scanner
 

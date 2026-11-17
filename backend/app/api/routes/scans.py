@@ -10,11 +10,12 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user
 from app.database.connection import get_db
-from app.models.models import Asset, Scan
+from app.models.models import Asset, Scan, User
 from app.schemas.report import ScanReportResponse
 from app.schemas.scan import ScanAcceptedResponse, ScanResponse
-from app.services import report_service
+from app.services import membership_service, report_service
 from app.services.scanner.scan_manager import run_scan
 
 logger = logging.getLogger("firmlock.scanner")
@@ -32,6 +33,7 @@ def start_scan(
     asset_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ScanAcceptedResponse:
     """Queue a read-only security scan for an authorised, active asset.
 
@@ -41,6 +43,8 @@ def start_scan(
     asset = db.get(Asset, asset_id)
     if asset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    if not membership_service.can_manage_assets(db, current_user.id, asset.business_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
     if not asset.authorization_confirmed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -73,10 +77,19 @@ def start_scan(
     response_model=ScanResponse,
     summary="Get a scan and its findings",
 )
-def get_scan(scan_id: int, db: Session = Depends(get_db)) -> ScanResponse:
+def get_scan(
+    scan_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ScanResponse:
     scan = db.get(Scan, scan_id)
     if scan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
+    asset = db.get(Asset, scan.asset_id)
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    if not membership_service.can_access_reports(db, current_user.id, asset.business_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a member of this business")
     return ScanResponse.model_validate(scan)
 
 
@@ -85,7 +98,19 @@ def get_scan(scan_id: int, db: Session = Depends(get_db)) -> ScanResponse:
     response_model=ScanReportResponse,
     summary="Get a structured security report for a scan",
 )
-def get_scan_report(scan_id: int, db: Session = Depends(get_db)) -> ScanReportResponse:
+def get_scan_report(
+    scan_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ScanReportResponse:
+    scan = db.get(Scan, scan_id)
+    if scan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
+    asset = db.get(Asset, scan.asset_id)
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    if not membership_service.can_access_reports(db, current_user.id, asset.business_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a member of this business")
     try:
         return report_service.build_scan_report(db, scan_id)
     except report_service.ScanNotFoundError as exc:
@@ -99,7 +124,19 @@ def get_scan_report(scan_id: int, db: Session = Depends(get_db)) -> ScanReportRe
     summary="Export scan findings as CSV",
     response_class=PlainTextResponse,
 )
-def get_scan_report_csv(scan_id: int, db: Session = Depends(get_db)) -> PlainTextResponse:
+def get_scan_report_csv(
+    scan_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PlainTextResponse:
+    scan = db.get(Scan, scan_id)
+    if scan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
+    asset = db.get(Asset, scan.asset_id)
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    if not membership_service.can_access_reports(db, current_user.id, asset.business_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a member of this business")
     try:
         csv_data = report_service.build_scan_csv(db, scan_id)
     except report_service.ScanNotFoundError as exc:
@@ -118,10 +155,16 @@ def get_scan_report_csv(scan_id: int, db: Session = Depends(get_db)) -> PlainTex
     response_model=List[ScanResponse],
     summary="List scan history for an asset",
 )
-def list_scans(asset_id: int, db: Session = Depends(get_db)) -> List[ScanResponse]:
+def list_scans(
+    asset_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> List[ScanResponse]:
     asset = db.get(Asset, asset_id)
     if asset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    if not membership_service.can_access_reports(db, current_user.id, asset.business_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a member of this business")
     stmt = select(Scan).where(Scan.asset_id == asset_id).order_by(Scan.id.desc())
     scans = list(db.scalars(stmt).all())
     return [ScanResponse.model_validate(scan) for scan in scans]

@@ -28,6 +28,54 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class BusinessMembership(Base):
+    __tablename__ = "business_memberships"
+    __table_args__ = (
+        UniqueConstraint("user_id", "business_id", name="uq_membership_user_business"),
+        CheckConstraint(
+            "role IN ('owner', 'admin', 'member')",
+            name="ck_membership_role",
+        ),
+        Index("ix_memberships_user_id", "user_id"),
+        Index("ix_memberships_business_id", "business_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    business_id: Mapped[int] = mapped_column(
+        ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="member")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="memberships")
+    business: Mapped["Business"] = relationship("Business", back_populates="memberships")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    memberships: Mapped[List["BusinessMembership"]] = relationship(
+        "BusinessMembership", back_populates="user", passive_deletes=True
+    )
+
+
 class Business(Base):
     __tablename__ = "businesses"
 
@@ -46,6 +94,9 @@ class Business(Base):
     )
     alerts: Mapped[List["Alert"]] = relationship(
         "Alert", back_populates="business", passive_deletes=True
+    )
+    memberships: Mapped[List["BusinessMembership"]] = relationship(
+        "BusinessMembership", back_populates="business", passive_deletes=True
     )
 
 

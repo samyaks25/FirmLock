@@ -15,324 +15,297 @@ network access occurs: scans and findings are persisted directly.
 
 from __future__ import annotations
 
-import importlib
-import os
-import sys
-import tempfile
-import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from tests.test_auth_helpers import get_auth_headers, login_user, register_user
 
-class RiskApiTestBase(unittest.TestCase):
-    def setUp(self) -> None:
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self._db_fd, self._db_path = tempfile.mkstemp(suffix=".db", dir=self._tmpdir.name)
-        os.close(self._db_fd)
-        os.environ["FIRMLOCK_DATABASE_URL"] = f"sqlite:///{Path(self._db_path).as_posix()}"
-        os.environ["FIRMLOCK_DATA_DIR"] = self._tmpdir.name
 
-        import app.core.config as config
+# Helper functions
 
-        importlib.reload(config)
-        import app.database.connection as connection
+def _register_and_login(client: TestClient) -> dict:
+    """Register and login a test user, return headers with token."""
+    register_user(client, "test@example.com", "password1234")
+    token_data = login_user(client, "test@example.com", "password1234")
+    return get_auth_headers(token_data["access_token"])
 
-        importlib.reload(connection)
 
-        connection.Base.registry.dispose()
-        connection.Base.metadata.clear()
-        if "app.models.models" in sys.modules:
-            importlib.reload(sys.modules["app.models.models"])
-        else:
-            import app.models.models  # noqa: F401
-        if "app.models" in sys.modules:
-            importlib.reload(sys.modules["app.models"])
+def _auth_post(client: TestClient, headers: dict, path: str, json: dict | None = None, **kwargs):
+    return client.post(path, json=json, headers=headers, **kwargs)
 
-        for name in [
-            "app.schemas.business",
-            "app.schemas.asset",
-            "app.schemas.scan",
-            "app.schemas.risk",
-            "app.schemas",
-            "app.services.business_service",
-            "app.services.asset_service",
-            "app.services.risk_config",
-            "app.services.scanner.check_catalog",
-            "app.services.risk_service",
-            "app.services.scanner.scan_manager",
-            "app.api.routes.businesses",
-            "app.api.routes.assets",
-            "app.api.routes.scans",
-            "app.api.routes.risk",
-            "app.api.router",
-            "app.main",
-        ]:
-            if name in sys.modules:
-                importlib.reload(sys.modules[name])
-            else:
-                importlib.import_module(name)
 
-        import app.main as main
+def _auth_get(client: TestClient, headers: dict, path: str, **kwargs):
+    return client.get(path, headers=headers, **kwargs)
 
-        self.main = main
-        self.client_ctx = TestClient(main.app)
-        self.client = self.client_ctx.__enter__()
 
-    def tearDown(self) -> None:
-        self.client_ctx.__exit__(None, None, None)
-        import app.database.connection as connection
+def _auth_patch(client: TestClient, headers: dict, path: str, json: dict | None = None, **kwargs):
+    return client.patch(path, json=json, headers=headers, **kwargs)
 
-        connection.engine.dispose()
-        self._tmpdir.cleanup()
-        os.environ.pop("FIRMLOCK_DATABASE_URL", None)
-        os.environ.pop("FIRMLOCK_DATA_DIR", None)
 
-    # --- helpers ---------------------------------------------------------
-    def _create_business(self, name: str = "Acme") -> dict:
-        return self.client.post("/api/businesses", json={"name": name}).json()
+def _create_business(client: TestClient, headers: dict, name: str = "Acme") -> dict:
+    return _auth_post(client, headers, "/api/businesses", json={"name": name}).json()
 
-    def _create_asset(self, domain: str = "example.com") -> dict:
-        biz = self._create_business()
-        return self.client.post(
-            f"/api/businesses/{biz['id']}/assets",
-            json={"domain": domain, "authorization_confirmed": True},
-        ).json()
 
-    def _seed_scan(
-        self,
-        asset_id: int,
-        *,
-        findings: list[tuple[str, str]] | None = None,
-        outcomes: dict[str, str] | None = None,
-        status: str = "completed",
-        security_score: int | None = None,
-        completed_at: datetime | None = None,
-    ) -> int:
-        """Persist a scan with findings and check results; return its ID."""
-        import app.database.connection as connection
-        import app.models.models as models
-        from app.services.scanner.check_catalog import ALL_GROUPS
+def _create_asset(client: TestClient, headers: dict, domain: str = "example.com") -> dict:
+    biz = _create_business(client, headers)
+    return _auth_post(
+        client, headers,
+        f"/api/businesses/{biz['id']}/assets",
+        json={"domain": domain, "authorization_confirmed": True},
+    ).json()
 
-        now = completed_at or datetime.now(timezone.utc)
-        with connection.SessionLocal() as db:
-            scan = models.Scan(
-                asset_id=asset_id,
-                status=status,
-                security_score=security_score,
-                started_at=now if status == "completed" else None,
-                completed_at=now if status == "completed" else None,
+
+def _seed_scan(
+    db_session,
+    asset_id: int,
+    *,
+    findings: list[tuple[str, str]] | None = None,
+    outcomes: dict[str, str] | None = None,
+    status: str = "completed",
+    security_score: int | None = None,
+    completed_at: datetime | None = None,
+) -> int:
+    """Persist a scan with findings and check results; return its ID."""
+    import app.models.models as models
+    from app.services.scanner.check_catalog import ALL_GROUPS
+
+    now = completed_at or datetime.now(timezone.utc)
+    scan = models.Scan(
+        asset_id=asset_id,
+        status=status,
+        security_score=security_score,
+        started_at=now if status == "completed" else None,
+        completed_at=now if status == "completed" else None,
+    )
+    db_session.add(scan)
+    db_session.commit()
+    db_session.refresh(scan)
+
+    for code, severity in findings or []:
+        db_session.add(
+            models.Finding(
+                scan_id=scan.id,
+                check_code=code,
+                title=f"title {code}",
+                description=f"description {code}",
+                severity=severity,
+                recommendation=f"fix {code}",
             )
-            db.add(scan)
-            db.commit()
-            db.refresh(scan)
+        )
+    db_session.commit()
 
-            for code, severity in findings or []:
-                db.add(
-                    models.Finding(
-                        scan_id=scan.id,
-                        check_code=code,
-                        title=f"title {code}",
-                        description=f"description {code}",
-                        severity=severity,
-                        recommendation=f"fix {code}",
-                    )
-                )
-            db.commit()
-
-            outcomes = outcomes or {}
-            if status == "completed":
-                for group in ALL_GROUPS:
-                    db.add(
-                        models.CheckResult(
-                            scan_id=scan.id,
-                            check_id=group.check_id,
-                            module=group.module,
-                            outcome=outcomes.get(group.check_id, "passed"),
-                            detail=f"test outcome {outcomes.get(group.check_id, 'passed')}",
-                        )
-                    )
-                db.commit()
-
-            return scan.id
-
-    def _update_scan_findings(self, scan_id: int, code: str, severity: str) -> None:
-        import app.database.connection as connection
-        import app.models.models as models
-
-        with connection.SessionLocal() as db:
-            db.add(
-                models.Finding(
-                    scan_id=scan_id,
-                    check_code=code,
-                    title=f"title {code}",
-                    description=f"description {code}",
-                    severity=severity,
-                    recommendation=f"fix {code}",
+    outcomes = outcomes or {}
+    if status == "completed":
+        for group in ALL_GROUPS:
+            db_session.add(
+                models.CheckResult(
+                    scan_id=scan.id,
+                    check_id=group.check_id,
+                    module=group.module,
+                    outcome=outcomes.get(group.check_id, "passed"),
+                    detail=f"test outcome {outcomes.get(group.check_id, 'passed')}",
                 )
             )
-            db.commit()
+        db_session.commit()
+
+    return scan.id
 
 
-class ScanRiskEndpointTests(RiskApiTestBase):
-    def test_completed_scan_risk(self) -> None:
-        asset = self._create_asset()
-        scan_id = self._seed_scan(
-            asset["id"], findings=[("HSTS_MISSING", "high")]
+def _update_scan_findings(db_session, scan_id: int, code: str, severity: str) -> None:
+    import app.models.models as models
+
+    db_session.add(
+        models.Finding(
+            scan_id=scan_id,
+            check_code=code,
+            title=f"title {code}",
+            description=f"description {code}",
+            severity=severity,
+            recommendation=f"fix {code}",
         )
-
-        resp = self.client.get(f"/api/scans/{scan_id}/risk")
-
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertEqual(body["scan_id"], scan_id)
-        self.assertEqual(body["asset_id"], asset["id"])
-        self.assertEqual(body["scan_status"], "completed")
-        self.assertTrue(body["score_available"])
-        self.assertEqual(body["security_score"], 85)
-        self.assertEqual(body["risk_level"], "high")
-        self.assertEqual(body["grade"], "B")
-        self.assertEqual(body["coverage"]["percentage"], 100.0)
-        self.assertEqual(body["findings_by_severity"]["high"], 1)
-        self.assertEqual(len(body["deductions"]), 1)
-        self.assertEqual(body["deductions"][0]["check_code"], "HSTS_MISSING")
-        self.assertEqual(body["score_weights"]["critical"], 25)
-
-    def test_unknown_scan_returns_404(self) -> None:
-        resp = self.client.get("/api/scans/999999/risk")
-        self.assertEqual(resp.status_code, 404)
-
-    def test_failed_scan_returns_no_score(self) -> None:
-        asset = self._create_asset()
-        scan_id = self._seed_scan(asset["id"], status="failed")
-
-        resp = self.client.get(f"/api/scans/{scan_id}/risk")
-
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertEqual(body["scan_status"], "failed")
-        self.assertFalse(body["score_available"])
-        self.assertIsNone(body["security_score"])
-        self.assertIn("failed", (body["unavailable_reason"] or "").lower())
-
-    def test_insufficient_coverage_returns_no_score(self) -> None:
-        asset = self._create_asset()
-        outcomes = {"SPF": "unknown", "DMARC": "unknown", "CAA": "unknown"}
-        scan_id = self._seed_scan(asset["id"], outcomes=outcomes)
-
-        resp = self.client.get(f"/api/scans/{scan_id}/risk")
-
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertFalse(body["score_available"])
-        self.assertIsNone(body["security_score"])
-        self.assertEqual(body["coverage"]["unknown"], 3)
-        self.assertEqual(body["coverage"]["percentage"], 78.6)
-        self.assertIn("coverage", (body["unavailable_reason"] or "").lower())
+    )
+    db_session.commit()
 
 
-class AssetRiskEndpointTests(RiskApiTestBase):
-    def test_latest_completed_scan_is_returned(self) -> None:
-        asset = self._create_asset()
-        base = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
-        older = self._seed_scan(
-            asset["id"], security_score=90, completed_at=base
-        )
-        newer = self._seed_scan(
-            asset["id"],
-            security_score=80,
-            completed_at=base + timedelta(hours=1),
-        )
+# Scan Risk Endpoint Tests
 
-        resp = self.client.get(f"/api/assets/{asset['id']}/risk")
+def test_completed_scan_risk(client: TestClient, db_session) -> None:
+    headers = _register_and_login(client)
+    asset = _create_asset(client, headers)
+    scan_id = _seed_scan(
+        db_session, asset["id"], findings=[("HSTS_MISSING", "high")]
+    )
 
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertEqual(body["scan_id"], newer)
-        self.assertNotEqual(body["scan_id"], older)
-        self.assertEqual(body["security_score"], 80)
-        self.assertEqual(body["asset_domain"], "example.com")
-        self.assertEqual(body["previous_assessment"]["scan_id"], older)
-        self.assertEqual(body["previous_assessment"]["security_score"], 90)
-        self.assertEqual(body["score_change"], -10)
+    resp = _auth_get(client, headers, f"/api/scans/{scan_id}/risk")
 
-    def test_latest_completed_ignores_newer_failed_scan(self) -> None:
-        asset = self._create_asset()
-        base = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
-        completed = self._seed_scan(
-            asset["id"], security_score=80, completed_at=base
-        )
-        self._seed_scan(
-            asset["id"],
-            status="failed",
-            completed_at=base + timedelta(hours=1),
-        )
-
-        body = self.client.get(f"/api/assets/{asset['id']}/risk").json()
-
-        self.assertEqual(body["scan_id"], completed)
-        self.assertEqual(body["security_score"], 80)
-
-    def test_no_completed_scan_returns_404(self) -> None:
-        asset = self._create_asset()
-        resp = self.client.get(f"/api/assets/{asset['id']}/risk")
-        self.assertEqual(resp.status_code, 404)
-
-    def test_missing_asset_returns_404(self) -> None:
-        resp = self.client.get("/api/assets/999999/risk")
-        self.assertEqual(resp.status_code, 404)
-
-    def test_history_lists_completed_scans_newest_first(self) -> None:
-        asset = self._create_asset()
-        base = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
-        older = self._seed_scan(asset["id"], security_score=90, completed_at=base)
-        newer = self._seed_scan(
-            asset["id"],
-            security_score=80,
-            completed_at=base + timedelta(hours=1),
-        )
-
-        resp = self.client.get(f"/api/assets/{asset['id']}/risk/history")
-
-        self.assertEqual(resp.status_code, 200)
-        body = resp.json()
-        self.assertEqual([entry["scan_id"] for entry in body], [newer, older])
-        self.assertEqual([entry["security_score"] for entry in body], [80, 90])
-
-    def test_history_missing_asset_returns_404(self) -> None:
-        resp = self.client.get("/api/assets/999999/risk/history")
-        self.assertEqual(resp.status_code, 404)
-
-    def test_historical_score_is_not_recomputed(self) -> None:
-        asset = self._create_asset()
-        scan_id = self._seed_scan(
-            asset["id"], findings=[("CRIT", "critical")]
-        )
-
-        first = self.client.get(f"/api/scans/{scan_id}/risk").json()
-        self.assertEqual(first["security_score"], 75)
-
-        # A later finding must not alter the already-persisted assessment.
-        self._update_scan_findings(scan_id, "CRIT_2", "critical")
-        second = self.client.get(f"/api/scans/{scan_id}/risk").json()
-
-        self.assertEqual(second["security_score"], 75)
-        self.assertEqual(len(second["deductions"]), 1)
-
-    def test_pre_existing_score_is_preserved(self) -> None:
-        asset = self._create_asset()
-        scan_id = self._seed_scan(
-            asset["id"],
-            findings=[("CRIT", "critical")],
-            security_score=42,
-        )
-
-        body = self.client.get(f"/api/scans/{scan_id}/risk").json()
-
-        self.assertEqual(body["security_score"], 42)
-        self.assertEqual(body["score_source"], "stored")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["scan_id"] == scan_id
+    assert body["asset_id"] == asset["id"]
+    assert body["scan_status"] == "completed"
+    assert body["score_available"] is True
+    assert body["security_score"] == 85
+    assert body["risk_level"] == "high"
+    assert body["grade"] == "B"
+    assert body["coverage"]["percentage"] == 100.0
+    assert body["findings_by_severity"]["high"] == 1
+    assert len(body["deductions"]) == 1
+    assert body["deductions"][0]["check_code"] == "HSTS_MISSING"
+    assert body["score_weights"]["critical"] == 25
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_unknown_scan_returns_404(client: TestClient) -> None:
+    headers = _register_and_login(client)
+    resp = _auth_get(client, headers, "/api/scans/999999/risk")
+    assert resp.status_code == 404
+
+
+def test_failed_scan_returns_no_score(client: TestClient, db_session) -> None:
+    headers = _register_and_login(client)
+    asset = _create_asset(client, headers)
+    scan_id = _seed_scan(db_session, asset["id"], status="failed")
+
+    resp = _auth_get(client, headers, f"/api/scans/{scan_id}/risk")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["scan_status"] == "failed"
+    assert body["score_available"] is False
+    assert body["security_score"] is None
+    assert "failed" in (body["unavailable_reason"] or "").lower()
+
+
+def test_insufficient_coverage_returns_no_score(client: TestClient, db_session) -> None:
+    headers = _register_and_login(client)
+    asset = _create_asset(client, headers)
+    outcomes = {"SPF": "unknown", "DMARC": "unknown", "CAA": "unknown"}
+    scan_id = _seed_scan(db_session, asset["id"], outcomes=outcomes)
+
+    resp = _auth_get(client, headers, f"/api/scans/{scan_id}/risk")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["score_available"] is False
+    assert body["security_score"] is None
+    assert body["coverage"]["unknown"] == 3
+    assert body["coverage"]["percentage"] == 78.6
+    assert "coverage" in (body["unavailable_reason"] or "").lower()
+
+
+# Asset Risk Endpoint Tests
+
+def test_latest_completed_scan_is_returned(client: TestClient, db_session) -> None:
+    headers = _register_and_login(client)
+    asset = _create_asset(client, headers)
+    base = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    older = _seed_scan(
+        db_session, asset["id"], security_score=90, completed_at=base
+    )
+    newer = _seed_scan(
+        db_session, asset["id"],
+        security_score=80,
+        completed_at=base + timedelta(hours=1),
+    )
+
+    resp = _auth_get(client, headers, f"/api/assets/{asset['id']}/risk")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["scan_id"] == newer
+    assert body["scan_id"] != older
+    assert body["security_score"] == 80
+    assert body["asset_domain"] == "example.com"
+    assert body["previous_assessment"]["scan_id"] == older
+    assert body["previous_assessment"]["security_score"] == 90
+    assert body["score_change"] == -10
+
+
+def test_latest_completed_ignores_newer_failed_scan(client: TestClient, db_session) -> None:
+    headers = _register_and_login(client)
+    asset = _create_asset(client, headers)
+    base = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    completed = _seed_scan(
+        db_session, asset["id"], security_score=80, completed_at=base
+    )
+    _seed_scan(
+        db_session, asset["id"],
+        status="failed",
+        completed_at=base + timedelta(hours=1),
+    )
+
+    body = _auth_get(client, headers, f"/api/assets/{asset['id']}/risk").json()
+
+    assert body["scan_id"] == completed
+    assert body["security_score"] == 80
+
+
+def test_no_completed_scan_returns_404(client: TestClient) -> None:
+    headers = _register_and_login(client)
+    asset = _create_asset(client, headers)
+    resp = _auth_get(client, headers, f"/api/assets/{asset['id']}/risk")
+    assert resp.status_code == 404
+
+
+def test_missing_asset_returns_404(client: TestClient) -> None:
+    headers = _register_and_login(client)
+    resp = _auth_get(client, headers, "/api/assets/999999/risk")
+    assert resp.status_code == 404
+
+
+def test_history_lists_completed_scans_newest_first(client: TestClient, db_session) -> None:
+    headers = _register_and_login(client)
+    asset = _create_asset(client, headers)
+    base = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    older = _seed_scan(db_session, asset["id"], security_score=90, completed_at=base)
+    newer = _seed_scan(
+        db_session, asset["id"],
+        security_score=80,
+        completed_at=base + timedelta(hours=1),
+    )
+
+    resp = _auth_get(client, headers, f"/api/assets/{asset['id']}/risk/history")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [entry["scan_id"] for entry in body] == [newer, older]
+    assert [entry["security_score"] for entry in body] == [80, 90]
+
+
+def test_history_missing_asset_returns_404(client: TestClient) -> None:
+    headers = _register_and_login(client)
+    resp = _auth_get(client, headers, "/api/assets/999999/risk/history")
+    assert resp.status_code == 404
+
+
+def test_historical_score_is_not_recomputed(client: TestClient, db_session) -> None:
+    headers = _register_and_login(client)
+    asset = _create_asset(client, headers)
+    scan_id = _seed_scan(
+        db_session, asset["id"], findings=[("CRIT", "critical")]
+    )
+
+    first = _auth_get(client, headers, f"/api/scans/{scan_id}/risk").json()
+    assert first["security_score"] == 75
+
+    # A later finding must not alter the already-persisted assessment.
+    _update_scan_findings(db_session, scan_id, "CRIT_2", "critical")
+    second = _auth_get(client, headers, f"/api/scans/{scan_id}/risk").json()
+
+    assert second["security_score"] == 75
+    assert len(second["deductions"]) == 1
+
+
+def test_pre_existing_score_is_preserved(client: TestClient, db_session) -> None:
+    headers = _register_and_login(client)
+    asset = _create_asset(client, headers)
+    scan_id = _seed_scan(
+        db_session, asset["id"],
+        findings=[("CRIT", "critical")],
+        security_score=42,
+    )
+
+    body = _auth_get(client, headers, f"/api/scans/{scan_id}/risk").json()
+
+    assert body["security_score"] == 42
+    assert body["score_source"] == "stored"

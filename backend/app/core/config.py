@@ -45,6 +45,25 @@ class Settings:
             "FIRMLOCK_DATABASE_URL", f"sqlite:///{default_db_path.as_posix()}"
         )
 
+        # --- JWT Authentication configuration -----------------------------
+        # The JWT signing secret MUST be set via FIRMLOCK_JWT_SECRET in
+        # production. A default is provided only for local development.
+        # Production deployments MUST use a strong secret (at least 32 bytes).
+        self.jwt_secret: str = os.getenv("FIRMLOCK_JWT_SECRET", "dev-secret-change-in-production")
+        self.jwt_algorithm: str = "HS256"
+        # Access token lifetime in minutes (default: 15 minutes).
+        self.jwt_access_token_expire_minutes: int = int(
+            os.getenv("FIRMLOCK_JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "15")
+        )
+        # JWT issuer and audience for validation.
+        self.jwt_issuer: str = os.getenv("FIRMLOCK_JWT_ISSUER", "firmlock")
+        self.jwt_audience: str = os.getenv("FIRMLOCK_JWT_AUDIENCE", "firmlock-api")
+
+        # --- Password policy ----------------------------------------------
+        self.password_min_length: int = int(
+            os.getenv("FIRMLOCK_PASSWORD_MIN_LENGTH", "12")
+        )
+
         # --- Risk scoring configuration ---------------------------------
         # Penalty weights are configurable so that the scoring model can be
         # tuned without code changes. Values are clamped to non-negative

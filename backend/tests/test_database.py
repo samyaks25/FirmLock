@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.database import connection as db_connection
-from app.models.models import Alert, Asset, Business, Finding, Scan
+from app.models.models import Alert, Asset, Business, BusinessMembership, Finding, Scan, User
 
 
 class DatabaseModelTests(unittest.TestCase):
@@ -50,7 +50,9 @@ class DatabaseModelTests(unittest.TestCase):
     def test_table_creation(self) -> None:
         inspector = inspect(self.engine)
         tables = set(inspector.get_table_names())
-        self.assertTrue({"businesses", "assets", "scans", "findings", "alerts"}.issubset(tables))
+        self.assertTrue(
+            {"businesses", "assets", "scans", "findings", "alerts", "users", "business_memberships"}.issubset(tables)
+        )
 
     def test_foreign_key_enforcement(self) -> None:
         with self.engine.connect() as conn:
@@ -195,6 +197,191 @@ class DatabaseModelTests(unittest.TestCase):
             with self.assertRaises(IntegrityError):
                 db.commit()
             db.rollback()
+
+    def test_user_creation(self) -> None:
+        with self.Session() as db:
+            user = User(
+                email="test@example.com",
+                hashed_password="hashed_password_here",
+                full_name="Test User",
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            self.assertIsNotNone(user.id)
+            self.assertEqual(user.email, "test@example.com")
+            self.assertEqual(user.full_name, "Test User")
+            self.assertTrue(user.is_active)
+            self.assertIsNotNone(user.created_at)
+            self.assertIsNotNone(user.updated_at)
+
+    def test_user_email_unique(self) -> None:
+        with self.Session() as db:
+            user1 = User(
+                email="test@example.com",
+                hashed_password="hashed_password_here",
+            )
+            db.add(user1)
+            db.commit()
+
+            user2 = User(
+                email="test@example.com",
+                hashed_password="another_hash",
+            )
+            db.add(user2)
+            with self.assertRaises(IntegrityError):
+                db.commit()
+            db.rollback()
+
+    def test_business_membership_creation(self) -> None:
+        with self.Session() as db:
+            user = User(
+                email="test@example.com",
+                hashed_password="hashed_password_here",
+            )
+            biz = Business(name="Acme Co")
+            db.add(user)
+            db.add(biz)
+            db.commit()
+
+            membership = BusinessMembership(user_id=user.id, business_id=biz.id, role="owner")
+            db.add(membership)
+            db.commit()
+            db.refresh(membership)
+            self.assertIsNotNone(membership.id)
+            self.assertEqual(membership.user_id, user.id)
+            self.assertEqual(membership.business_id, biz.id)
+            self.assertEqual(membership.role, "owner")
+            self.assertIsNotNone(membership.created_at)
+
+    def test_business_membership_unique_user_business(self) -> None:
+        with self.Session() as db:
+            user = User(
+                email="test@example.com",
+                hashed_password="hashed_password_here",
+            )
+            biz = Business(name="Acme Co")
+            db.add(user)
+            db.add(biz)
+            db.commit()
+
+            membership1 = BusinessMembership(user_id=user.id, business_id=biz.id, role="owner")
+            db.add(membership1)
+            db.commit()
+
+            membership2 = BusinessMembership(user_id=user.id, business_id=biz.id, role="admin")
+            db.add(membership2)
+            with self.assertRaises(IntegrityError):
+                db.commit()
+            db.rollback()
+
+    def test_business_membership_role_constraint(self) -> None:
+        with self.Session() as db:
+            user = User(
+                email="test@example.com",
+                hashed_password="hashed_password_here",
+            )
+            biz = Business(name="Acme Co")
+            db.add(user)
+            db.add(biz)
+            db.commit()
+
+            membership = BusinessMembership(user_id=user.id, business_id=biz.id, role="invalid_role")
+            db.add(membership)
+            with self.assertRaises(IntegrityError):
+                db.commit()
+            db.rollback()
+
+    def test_business_membership_cascade_delete_user(self) -> None:
+        with self.Session() as db:
+            user = User(
+                email="test@example.com",
+                hashed_password="hashed_password_here",
+            )
+            biz = Business(name="Acme Co")
+            db.add(user)
+            db.add(biz)
+            db.commit()
+
+            membership = BusinessMembership(user_id=user.id, business_id=biz.id, role="owner")
+            db.add(membership)
+            db.commit()
+            membership_id = membership.id
+
+            db.delete(user)
+            db.commit()
+
+            # Membership should be cascade deleted
+            remaining = db.get(BusinessMembership, membership_id)
+            self.assertIsNone(remaining)
+
+    def test_business_membership_cascade_delete_business(self) -> None:
+        with self.Session() as db:
+            user = User(
+                email="test@example.com",
+                hashed_password="hashed_password_here",
+            )
+            biz = Business(name="Acme Co")
+            db.add(user)
+            db.add(biz)
+            db.commit()
+
+            membership = BusinessMembership(user_id=user.id, business_id=biz.id, role="owner")
+            db.add(membership)
+            db.commit()
+            membership_id = membership.id
+
+            db.delete(biz)
+            db.commit()
+
+            # Membership should be cascade deleted
+            remaining = db.get(BusinessMembership, membership_id)
+            self.assertIsNone(remaining)
+
+    def test_user_memberships_relationship(self) -> None:
+        with self.Session() as db:
+            user = User(
+                email="test@example.com",
+                hashed_password="hashed_password_here",
+            )
+            biz1 = Business(name="Acme Co")
+            biz2 = Business(name="Beta Inc")
+            db.add(user)
+            db.add(biz1)
+            db.add(biz2)
+            db.commit()
+
+            membership1 = BusinessMembership(user_id=user.id, business_id=biz1.id, role="owner")
+            membership2 = BusinessMembership(user_id=user.id, business_id=biz2.id, role="admin")
+            db.add(membership1)
+            db.add(membership2)
+            db.commit()
+            db.refresh(user)
+
+            self.assertEqual(len(user.memberships), 2)
+            roles = {m.role for m in user.memberships}
+            self.assertEqual(roles, {"owner", "admin"})
+
+    def test_business_memberships_relationship(self) -> None:
+        with self.Session() as db:
+            user1 = User(email="user1@example.com", hashed_password="hash1")
+            user2 = User(email="user2@example.com", hashed_password="hash2")
+            biz = Business(name="Acme Co")
+            db.add(user1)
+            db.add(user2)
+            db.add(biz)
+            db.commit()
+
+            membership1 = BusinessMembership(user_id=user1.id, business_id=biz.id, role="owner")
+            membership2 = BusinessMembership(user_id=user2.id, business_id=biz.id, role="member")
+            db.add(membership1)
+            db.add(membership2)
+            db.commit()
+            db.refresh(biz)
+
+            self.assertEqual(len(biz.memberships), 2)
+            roles = {m.role for m in biz.memberships}
+            self.assertEqual(roles, {"owner", "member"})
 
 
 if __name__ == "__main__":
