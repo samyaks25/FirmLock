@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Generator
 
 import pytest
+from alembic import command
+from alembic.config import Config as AlembicConfig
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
@@ -19,9 +21,23 @@ from app.main import app
 from app.services.scanner import scan_manager
 
 
+def _run_alembic_upgrade(db_url: str) -> None:
+    """Run Alembic migrations to bring a test database up to date.
+
+    Creates a temporary alembic.ini configuration pointing to the test database
+    and runs 'upgrade head'.
+    """
+    # Create a temporary alembic config
+    alembic_cfg = AlembicConfig("alembic.ini")
+    alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+
+    # Run upgrade head
+    command.upgrade(alembic_cfg, "head")
+
+
 @pytest.fixture(scope="function")
 def test_db() -> Generator[tuple[Engine, sessionmaker], None, None]:
-    """Create a temporary SQLite database for testing."""
+    """Create a temporary SQLite database for testing with Alembic migrations."""
     tmpdir = tempfile.TemporaryDirectory()
     db_fd, db_path = tempfile.mkstemp(suffix=".db", dir=tmpdir.name)
     os.close(db_fd)
@@ -39,15 +55,15 @@ def test_db() -> Generator[tuple[Engine, sessionmaker], None, None]:
 
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
-    # Create all tables
-    Base.metadata.create_all(bind=engine)
+    # Run Alembic migrations to create schema (instead of Base.metadata.create_all)
+    _run_alembic_upgrade(db_url)
 
     # Override the module-level SessionLocal and engine for background tasks
     original_session_local = connection.SessionLocal
     original_engine = connection.engine
     connection.SessionLocal = TestingSessionLocal
     connection.engine = engine
-    
+
     # Also override scan_manager's SessionLocal
     original_scan_session_local = scan_manager.SessionLocal
     scan_manager.SessionLocal = TestingSessionLocal

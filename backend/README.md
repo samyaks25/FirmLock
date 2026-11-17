@@ -74,6 +74,12 @@ backend/
 │           ├── dns_inspector.py
 │           └── scan_manager.py
 ├── data/
+├── migrations/
+│   ├── env.py
+│   ├── script.py.mako
+│   ├── alembic.ini
+│   └── versions/
+│       └── 02e294bfb1aa_initial_migration_all_models.py
 ├── tests/
 │   ├── conftest.py                  # pytest fixtures (test_db, db_session, client)
 │   ├── test_auth.py                 # 25 tests: register, login, tokens, /me
@@ -103,8 +109,9 @@ backend/
 - **Location:** default file `backend/data/firmlock.db`; `data/` is created automatically and gitignored.
 - **Sessions:** `SessionLocal` factory and FastAPI `get_db` dependency (per-request session, closed in `finally`).
 - **SQLite specifics:** `check_same_thread=False` and `PRAGMA foreign_keys=ON` enforced on every connection.
-- **Initialization:** tables are created automatically at app startup via `init_db()` / `Base.metadata.create_all(...)`.
-- **Migrations:** **not** implemented. `create_all` is an initial development approach only; Alembic (or equivalent) migrations are required before production deployment and schema evolution.
+- **Migrations:** **Alembic** is used for schema management. The `migrations/` directory contains the migration environment, script template, and versioned migration scripts.
+- **Initialization:** The application **does not** automatically create tables on startup. Instead, it checks the migration version and logs a warning if the schema is outdated. Fresh databases are initialized with `alembic upgrade head`. Existing databases created with `create_all()` can be adopted using `alembic stamp head`.
+- **Version tracking:** The `alembic_version` table tracks the current migration revision.
 
 ## Database models
 
@@ -563,11 +570,130 @@ Dependencies (`requirements.txt`): `fastapi`, `uvicorn[standard]`, `pydantic`, `
 
 Testing dependency (`requirements-dev.txt`): `httpx` (required by FastAPI/Starlette `TestClient`), plus all production requirements.
 
-## Database initialization
+## Database migrations (Alembic)
 
-- The `backend/data/` directory is created automatically from config/startup.
-- Tables are created automatically on application startup (`lifespan` → `init_db()`).
-- Default DB file: `backend/data/firmlock.db` (gitignored). Override with `FIRMLOCK_DATABASE_URL`.
+Schema changes are managed through **Alembic** migrations. The migration files are located in `migrations/versions/`.
+
+### Migration commands
+
+```powershell
+# Apply all pending migrations (fresh database or upgrade)
+alembic upgrade head
+
+# Roll back the last migration
+alembic downgrade -1
+
+# Create a new migration (auto-generates from model changes)
+alembic revision --autogenerate -m "Description of changes"
+
+# Show current migration version
+alembic current
+
+# Show migration history
+alembic history
+
+# Show migration history with details
+alembic history --verbose
+```
+
+### Fresh database setup
+
+For a new database (no existing data):
+
+```powershell
+# 1. Ensure FIRMLOCK_DATABASE_URL points to the desired database file
+$env:FIRMLOCK_DATABASE_URL = "sqlite:///backend/data/firmlock.db"
+
+# 2. Run migrations to create all tables with correct schema version
+alembic upgrade head
+```
+
+The `alembic upgrade head` command creates all tables, indexes, constraints, and the `alembic_version` table tracking the current revision.
+
+### Existing database adoption
+
+If you have an existing database created with the old `create_all()` approach (no `alembic_version` table):
+
+**⚠️ BACKUP FIRST** — Always back up your database before running migration commands.
+
+```powershell
+# 1. Back up the database file
+cp backend/data/firmlock.db backend/data/firmlock.db.backup.$(Get-Date -Format "yyyyMMdd_HHmmss")
+
+# 2. Verify schema compatibility
+#    The database must match the initial migration schema exactly.
+#    If you have made manual schema changes, resolve them before stamping.
+
+# 3. Stamp the database with the baseline revision (no schema changes applied)
+alembic stamp head
+
+# 4. Verify the stamp succeeded
+alembic current
+# Should show: 02e294bfb1aa (head)
+```
+
+**Important:** `alembic stamp head` does **not** modify the schema — it only records the current revision in `alembic_version`. The database schema must already match the migration. If the schema diverges, you must manually reconcile it before stamping.
+
+### Backup instructions
+
+```powershell
+# SQLite file backup (database must not be in use)
+cp backend/data/firmlock.db backend/data/firmlock.db.backup.$(Get-Date -Format "yyyyMMdd_HHmmss")
+
+# Or use SQLite's backup API for live databases
+sqlite3 backend/data/firmlock.db ".backup 'backend/data/firmlock.db.backup.$(Get-Date -Format 'yyyyMMdd_HHmmss')'"
+```
+
+### Rollback instructions
+
+To roll back the last migration (use with caution — may lose data):
+
+```powershell
+# 1. BACKUP the database first
+cp backend/data/firmlock.db backend/data/firmlock.db.pre-rollback.$(Get-Date -Format "yyyyMMdd_HHmmss")
+
+# 2. Downgrade one revision
+alembic downgrade -1
+
+# 3. Verify
+alembic current
+```
+
+**Warning:** Downgrades are destructive for `DROP TABLE` / `DROP COLUMN` operations. The initial migration creates all tables, so downgrading from the initial revision will drop all tables. Only downgrade if you have a backup and understand the data loss implications.
+
+### Development setup
+
+For local development with a fresh database:
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+
+# Initialize database with migrations
+alembic upgrade head
+
+# Run the application
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+For running tests (uses temporary databases with Alembic migrations):
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+## Database initialization (legacy)
+
+The `init_db()` function in `app/database/connection.py` remains available but is **deprecated** for production use. It uses `Base.metadata.create_all()` and does not create the `alembic_version` table. It is retained only for:
+
+- Automated test environments (see `tests/conftest.py` — now uses Alembic)
+- Fresh database initialization when migrations are explicitly not used
+
+**Do not use `init_db()` on a database that will be managed by Alembic.** Doing so will create tables without version tracking, causing future migrations to fail or behave unexpectedly.
 
 ## Running the backend
 
@@ -576,7 +702,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 - Root: <http://127.0.0.1:8000/>
-- Health: <http://127.0.0.1:8000/api/health>
+- Health: <http://127.0.0.1:8000/api/health> (includes database migration status)
 - Docs: <http://127.0.0.1:8000/docs>
 
 ## API endpoints
@@ -584,7 +710,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 | Method | Path | Description | Success | Errors |
 |---|---|---|---|---|
 | GET | `/` | Welcome message | 200 | — |
-| GET | `/api/health` | Health/service/version/environment | 200 | — |
+| GET | `/api/health` | Health/service/version/environment + database migration status | 200 | — |
 | POST | `/api/auth/register` | Register new user | 201 | 422 validation, 409 email exists |
 | POST | `/api/auth/login` | Obtain JWT (form-encoded) | 200 | 401 invalid credentials |
 | GET | `/api/auth/me` | Current user profile | 200 | 401 missing/invalid token |
@@ -874,7 +1000,7 @@ Risk/report/alert/dashboard tests persist findings and check results directly an
 - **Authorization is attestation only:** `authorization_confirmed` is a user claim, not independent proof of domain ownership.
 - **No rate limiting/abuse protection, no CSRF controls, no audit logging.**
 - **SQLite for local dev:** not suited for concurrent multi-user production workloads.
-- **No migrations:** `create_all` only; schema changes require migration tooling before production.
+- **Migrations implemented (Stage 07A):** Alembic migrations replace `create_all`. Schema changes require generating and applying migrations. Existing databases can be adopted via `alembic stamp head`.
 - **CORS:** explicit local origins only; review before deployment.
 - **Scanner scope:** checks are a fixed, non-exhaustive set (TLS/SSL, HTTPS behaviour, six security headers, SPF/DMARC/CAA). No port scanning, content inspection, vulnerability exploitation, or intrusive testing.
 - **Risk score is relative:** the score and coverage reflect the fixed check catalogue and a single point-in-time observation. They are prioritisation aids, not a certification or guarantee of security. Unknown checks reduce coverage and may hide real issues; they are never treated as secure.
@@ -1026,6 +1152,65 @@ curl -X POST -H "Authorization: Bearer eyJ..." \
   -d '{"email":"analyst@example.com","role":"analyst"}' \
   http://127.0.0.1:8000/api/businesses/1/members
 ```
+
+## Stage 07A: Database Migrations and Production Configuration
+
+This stage replaces the MVP-only `create_all()` database initialization with **Alembic migrations** for production-ready schema management.
+
+### What was implemented
+
+- **Alembic installation and configuration** (`alembic.ini`, `migrations/env.py`, `migrations/script.py.mako`)
+- **Initial migration** (`02e294bfb1aa_initial_migration_all_models.py`) covering all 9 SQLAlchemy models:
+  - `Business`, `User`, `BusinessMembership`
+  - `Asset`, `Scan`, `Finding`, `CheckResult`
+  - `RiskAssessment`, `Alert`
+- **Full constraint preservation:** Foreign keys (`RESTRICT`/`CASCADE`/`SET NULL`), unique constraints, check constraints, and indexes
+- **UTC timestamp behavior** preserved with `DateTime(timezone=True)` and `utcnow()` default factory
+- **Migration version tracking** via `alembic_version` table
+- **Upgrade/downgrade support** (downgrade drops all tables for the initial migration)
+
+### Application startup changes
+
+- **No automatic schema changes** on startup — the application only checks migration status
+- **Health endpoint** (`/api/health`) now reports database migration status:
+  ```json
+  {
+    "status": "ok",
+    "service": "FirmLock API",
+    "version": "0.1.0",
+    "environment": "development",
+    "database_migration": {
+      "up_to_date": true,
+      "message": "Database schema is up to date (revision: 02e294bfb1aa)."
+    }
+  }
+  ```
+- **Clear error reporting** when schema is outdated (logs warning, does not crash)
+- **Test database initialization** uses Alembic migrations for schema consistency
+
+### Database transition procedures
+
+See [Database migrations (Alembic)](#database-migrations-alembic) for:
+- Fresh database setup: `alembic upgrade head`
+- Existing database adoption: backup → verify schema → `alembic stamp head`
+- Backup and rollback instructions
+- Development setup with migrations
+
+### Testing
+
+All 234 existing tests pass with the new Alembic-based test fixtures:
+- Migration from empty database verified
+- Migration upgrade/downgrade verified
+- Existing database adoption procedure verified
+- Schema consistency (foreign keys, unique constraints, indexes, UTC timestamps) verified
+- All API, authentication, and business logic tests pass
+
+### Known limitations
+
+- **Downgrade from initial revision drops all tables** — only use with backups
+- **Single linear migration history** — no branching/merging support yet
+- **SQLite-only** — PostgreSQL/MySQL would require dialect-specific adjustments
+- **No automatic migration generation on model changes** — developers must run `alembic revision --autogenerate` manually
 
 ## Out of scope (future stages)
 

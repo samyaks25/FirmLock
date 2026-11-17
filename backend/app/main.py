@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
 from app.core.config import settings
-from app.database.connection import init_db
+from app.database.connection import check_migration_version
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,8 +25,18 @@ logger = logging.getLogger("firmlock")
 
 @asynccontextmanager
 async def lifespan(_application: FastAPI):
-    """Application lifespan hook for startup/shutdown tasks."""
-    init_db()
+    """Application lifespan hook for startup/shutdown tasks.
+
+    Checks database migration status on startup. Does NOT automatically run
+    migrations - schema changes must be applied explicitly via 'alembic upgrade head'.
+    Logs a warning if the database schema is outdated.
+    """
+    is_up_to_date, message = check_migration_version()
+    if is_up_to_date:
+        logger.info("Database migration check: %s", message)
+    else:
+        logger.warning("Database migration check: %s", message)
+        logger.warning("Run 'alembic upgrade head' to apply pending migrations.")
     yield
 
 
@@ -70,13 +80,18 @@ def create_app() -> FastAPI:
         }
 
     @application.get("/api/health", tags=["Health"], summary="Backend health status")
-    def health_check() -> Dict[str, str]:
-        """Return the backend health status, service name and API version."""
+    def health_check() -> Dict[str, Any]:
+        """Return the backend health status, service name, API version, and migration status."""
+        is_up_to_date, migration_message = check_migration_version()
         return {
             "status": "ok",
             "service": settings.app_name,
             "version": settings.api_version,
             "environment": settings.environment,
+            "database_migration": {
+                "up_to_date": is_up_to_date,
+                "message": migration_message,
+            },
         }
 
     application.include_router(api_router)
