@@ -305,6 +305,20 @@ def run_scan(
             risk_config,
         )
 
+        # Generate in-app alerts from actionable findings. Alert generation is
+        # isolated from scan completion so a failure here does not invalidate the
+        # scan or its risk assessment.
+        try:
+            from app.services.alert_service import generate_alerts_for_scan
+
+            generate_alerts_for_scan(db, scan.id)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("Could not generate alerts for scan %s.", scan.id)
+            try:
+                db.rollback()
+            except Exception:
+                logger.exception("Could not roll back after alert generation failure.")
+
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("Unexpected error while running scan %s: %s", scan_id, exc)
         try:

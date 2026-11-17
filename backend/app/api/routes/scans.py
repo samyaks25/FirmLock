@@ -6,12 +6,15 @@ import logging
 from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.models.models import Asset, Scan
+from app.schemas.report import ScanReportResponse
 from app.schemas.scan import ScanAcceptedResponse, ScanResponse
+from app.services import report_service
 from app.services.scanner.scan_manager import run_scan
 
 logger = logging.getLogger("firmlock.scanner")
@@ -75,6 +78,39 @@ def get_scan(scan_id: int, db: Session = Depends(get_db)) -> ScanResponse:
     if scan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
     return ScanResponse.model_validate(scan)
+
+
+@router.get(
+    "/api/scans/{scan_id}/report",
+    response_model=ScanReportResponse,
+    summary="Get a structured security report for a scan",
+)
+def get_scan_report(scan_id: int, db: Session = Depends(get_db)) -> ScanReportResponse:
+    try:
+        return report_service.build_scan_report(db, scan_id)
+    except report_service.ScanNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except report_service.AssetNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/api/scans/{scan_id}/report.csv",
+    summary="Export scan findings as CSV",
+    response_class=PlainTextResponse,
+)
+def get_scan_report_csv(scan_id: int, db: Session = Depends(get_db)) -> PlainTextResponse:
+    try:
+        csv_data = report_service.build_scan_csv(db, scan_id)
+    except report_service.ScanNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except report_service.AssetNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return PlainTextResponse(
+        content=csv_data,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="scan-{scan_id}-report.csv"'},
+    )
 
 
 @router.get(

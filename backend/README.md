@@ -25,7 +25,8 @@ backend/
 │   │       ├── businesses.py
 │   │       ├── assets.py
 │   │       ├── scans.py
-│   │       └── risk.py            # risk assessment endpoints
+│   │       ├── risk.py
+│   │       └── alerts.py          # alert list/detail/update/summary
 │   ├── core/
 │   │   ├── __init__.py
 │   │   └── config.py
@@ -40,26 +41,32 @@ backend/
 │   │   ├── business.py
 │   │   ├── asset.py
 │   │   ├── scan.py
-│   │   └── risk.py                # risk assessment response schemas
+│   │   ├── risk.py
+│   │   ├── alert.py               # alert response/update/list/summary schemas
+│   │   ├── report.py              # scan and asset report schemas
+│   │   └── dashboard.py           # dashboard response schemas
 │   └── services/
 │       ├── __init__.py
 │       ├── business_service.py
 │       ├── asset_service.py
-│       ├── risk_config.py         # configurable scoring weights
-│       ├── risk_service.py        # scoring, coverage, assessment snapshots
+│       ├── risk_config.py
+│       ├── risk_service.py
+│       ├── alert_service.py       # alert generation and lifecycle
+│       ├── report_service.py      # scan/CSV/historical reports
+│       ├── dashboard_service.py   # business dashboard aggregation
 │       └── scanner/
 │           ├── __init__.py
-│           ├── config.py            # limits, check codes, severity heuristics
-│           ├── findings.py          # shared Finding dataclass
-│           ├── check_catalog.py     # expected checks + outcome derivation
-│           ├── target_validator.py  # domain/DNS validation + SSRF protection
-│           ├── pinned_http.py       # DNS-pinned HTTP(S) transport
-│           ├── tls_inspector.py     # SSL/TLS certificate inspection
-│           ├── https_inspector.py   # HTTPS + HTTP->HTTPS redirect checks
-│           ├── header_inspector.py  # HTTP security header checks
-│           ├── dns_inspector.py     # SPF / DMARC / CAA checks
-│           └── scan_manager.py      # orchestration + persistence + scoring
-├── data/                    # local SQLite DB (gitignored, auto-created)
+│           ├── config.py
+│           ├── findings.py
+│           ├── check_catalog.py
+│           ├── target_validator.py
+│           ├── pinned_http.py
+│           ├── tls_inspector.py
+│           ├── https_inspector.py
+│           ├── header_inspector.py
+│           ├── dns_inspector.py
+│           └── scan_manager.py
+├── data/
 ├── tests/
 │   ├── test_api.py
 │   ├── test_database.py
@@ -69,7 +76,10 @@ backend/
 │   ├── test_scan_manager.py
 │   ├── test_scan_api.py
 │   ├── test_risk_engine.py
-│   └── test_risk_api.py
+│   ├── test_risk_api.py
+│   ├── test_alerts_api.py
+│   ├── test_reports_api.py
+│   └── test_dashboard_api.py
 ├── requirements.txt
 └── README.md
 ```
@@ -557,18 +567,26 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 | POST | `/api/businesses` | Create business | 201 | 422 validation |
 | GET | `/api/businesses` | List businesses | 200 | — |
 | GET | `/api/businesses/{business_id}` | Get business | 200 | 404 not found |
+| GET | `/api/businesses/{business_id}/dashboard` | Business dashboard summary | 200 | 404 business |
 | POST | `/api/businesses/{business_id}/assets` | Register authorised website | 201 | 404 business, 409 duplicate domain, 422 validation |
 | GET | `/api/businesses/{business_id}/assets` | List assets for business | 200 | 404 business |
 | GET | `/api/assets/{asset_id}` | Get asset | 200 | 404 not found |
 | PATCH | `/api/assets/{asset_id}` | Update monitoring status (`status`, `monitoring_enabled`) | 200 | 404, 422 |
+| GET | `/api/assets/{asset_id}/reports` | Historical scan report summaries for an asset | 200 | 404 asset |
 | POST | `/api/assets/{asset_id}/scan` | Queue a read-only security scan for an authorised, active asset | 202 | 404 asset, 403 unauthorised/paused/monitoring-off |
 | GET | `/api/scans/{scan_id}` | Get a scan and its findings | 200 | 404 not found |
+| GET | `/api/scans/{scan_id}/report` | Structured scan security report | 200 | 404 scan/asset |
+| GET | `/api/scans/{scan_id}/report.csv` | Download scan findings as CSV | 200 | 404 scan/asset |
 | GET | `/api/assets/{asset_id}/scans` | List scan history for an asset | 200 | 404 asset |
 | GET | `/api/scans/{scan_id}/risk` | Risk assessment for a scan | 200 | 404 not found |
 | GET | `/api/assets/{asset_id}/risk` | Latest completed scan's risk assessment for an asset | 200 | 404 asset, 404 no completed scan |
 | GET | `/api/assets/{asset_id}/risk/history` | Completed-scan risk assessment history (newest first) | 200 | 404 asset |
+| GET | `/api/businesses/{business_id}/alerts` | List business alerts (filters/pagination) | 200 | 404 business, 422 invalid filter |
+| GET | `/api/alerts/{alert_id}` | Retrieve alert details | 200 | 404 not found |
+| PATCH | `/api/alerts/{alert_id}` | Mark alert read or resolve | 200 | 404, 422 invalid update |
+| GET | `/api/businesses/{business_id}/alerts/summary` | Alert summary counts | 200 | 404 business |
 
-`PATCH /api/assets/{asset_id}` only updates monitoring fields; it does **not** allow changing business ownership or authorization records.
+`PATCH /api/assets/{asset_id}` only updates monitoring fields; it does **not** allow changing business ownership or authorization records. Alert, report and dashboard endpoints are MVP endpoints (no authentication/tenant isolation).
 
 ### Example requests/responses
 
@@ -634,18 +652,151 @@ Poll `GET /api/scans/1` until `status` becomes `completed` (or `failed`); the
 response then includes a `findings` array. `GET /api/assets/1/scans` returns the
 full history.
 
-**Read the risk assessment**
+## Alerts and reporting (Stage 05)
+
+### Alert generation logic
+
+In-app alerts are generated automatically from stored, actionable scan findings after a scan is finalised and its risk assessment is persisted (`app/services/alert_service.py`, invoked by the scan manager).
+
+Rules:
+
+- **Alertable severities:** `critical`, `high`, `medium`, `low`. `info` findings never create alerts.
+- **Excluded technical markers:** findings whose `check_code` is a technical scanning failure marker (for example `DNS_TIMEOUT`, `HEADERS_UNAVAILABLE`, as defined in `app/services/scanner/check_catalog.py`) never create alerts.
+- **No duplicate unresolved alerts:** if an unresolved alert (`unread` or `read`) already exists for the same asset and `check_code`, no new alert is created for a later scan.
+- **Reappearing resolved issues:** if a previously resolved issue is detected again in a later completed scan, a **new** alert is created. Previously resolved alerts are preserved.
+- **History preserved:** alerts are never deleted by generation or lifecycle updates.
+- **Alert contents:** each alert stores `title`, `message`, `severity`, `status`, `business_id`, `asset_id`, `finding_id`, and timestamps. The message is built from the finding description, evidence (when present) and recommendation, scoped to the asset domain.
+- **Isolation:** alert generation runs in its own guarded step after scan/risk completion; generation failures are logged and do not invalidate the completed scan or its risk assessment.
+
+### Alert lifecycle
+
+- `unread` (default): newly generated, not yet reviewed.
+- `read`: reviewed but not resolved (`read_at` set).
+- `resolved`: issue addressed/acknowledged (`resolved_at` set; also marked read). Resolved alerts cannot be reopened; a reappearing issue creates a new alert instead.
+
+### Reporting functionality
+
+Reports are built from **actual stored** scan records, findings and risk assessments (`app/services/report_service.py`). No findings or scores are invented.
+
+- **Scan report** (`GET /api/scans/{scan_id}/report`): scan metadata, business/website details, security score/risk classification (when available), scan coverage, findings grouped by severity counts, evidence, recommendations, and timestamps.
+- **Missing/unavailable scores:** failed, pending, running scans, or completed scans with insufficient coverage return `security_score: null`, `score_available: false`, and an explicit `unavailable_reason`. Findings and available metadata are still returned.
+- **Historical reports** (`GET /api/assets/{asset_id}/reports`): per-scan summaries for an asset including status, security score (if available), risk classification/grade, coverage, scan dates and finding counts. Historical risk assessments are immutable snapshots and are not modified.
+- **Missing entities:** unknown scan/asset IDs return `404`.
+
+### CSV export
+
+`GET /api/scans/{scan_id}/report.csv` returns a downloadable CSV (`text/csv; charset=utf-8`, `Content-Disposition: attachment`) with scan/business/asset context, score/availability fields and one row per finding (or one context row when there are no findings). Uses stored results only.
+
+### Dashboard API
+
+`GET /api/businesses/{business_id}/dashboard` aggregates actual database records (`app/services/dashboard_service.py`):
+
+- Total monitored websites, active and paused website counts.
+- Latest scan information (most recent scan for the business).
+- Latest security scores/overview (average over latest completed per-asset assessments with available scores, scored-asset count, overall risk level).
+- Critical security findings from latest completed scans per asset.
+- Alert counts: total unread, total, critical/high/medium/low, resolved.
+- Recent security activity (recent scans and alerts).
+- Overall business security overview.
+
+Empty businesses return zeroed counts, `null` latest-scan/score fields, and empty lists (not invented data).
+
+### Stage 05 API endpoints
+
+| Method | Path | Description | Success | Errors |
+|---|---|---|---|---|
+| GET | `/api/businesses/{business_id}/alerts` | List business alerts (filters: `severity`, `status`; pagination: `page`, `page_size`) | 200 | 404 business, 422 invalid filter |
+| GET | `/api/alerts/{alert_id}` | Retrieve alert details | 200 | 404 not found |
+| PATCH | `/api/alerts/{alert_id}` | Mark alert read (`{"read": true}`) or resolve (`{"resolved": true}`) | 200 | 404, 422 invalid update |
+| GET | `/api/businesses/{business_id}/alerts/summary` | Alert summary counts | 200 | 404 business |
+| GET | `/api/scans/{scan_id}/report` | Structured scan security report | 200 | 404 scan/asset |
+| GET | `/api/scans/{scan_id}/report.csv` | Download scan findings as CSV | 200 | 404 scan/asset |
+| GET | `/api/assets/{asset_id}/reports` | Historical scan report summaries for an asset | 200 | 404 asset |
+| GET | `/api/businesses/{business_id}/dashboard` | Business dashboard summary | 200 | 404 business |
+
+### Stage 05 example requests/responses
+
+**List alerts (filtered, paginated)**
 ```http
-GET /api/scans/1/risk
-GET /api/assets/1/risk
-GET /api/assets/1/risk/history
+GET /api/businesses/1/alerts?severity=high&status=unread&page=1&page_size=20
+```
+Response `200`:
+```json
+{
+  "items": [
+    {
+      "id": 10,
+      "business_id": 1,
+      "asset_id": 1,
+      "finding_id": 42,
+      "title": "Strict-Transport-Security (HSTS) header is missing",
+      "message": "Security issue detected on example.com. ...",
+      "severity": "high",
+      "status": "unread",
+      "created_at": "2026-11-17T07:00:12Z",
+      "read_at": null,
+      "resolved_at": null
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "page_size": 20,
+  "pages": 1
+}
 ```
 
-`GET /api/assets/1/risk` returns the latest completed scan, the previous
-assessment and the score change. If the latest scan has insufficient coverage,
-`security_score` is `null` and `unavailable_reason` explains why; findings and
-coverage are still returned. If the asset has no completed scan, the endpoint
-returns `404`.
+**Get/patch alert**
+```http
+GET /api/alerts/10
+PATCH /api/alerts/10
+Content-Type: application/json
+
+{"resolved": true}
+```
+Response `200` includes `"status": "resolved"` with `read_at`/`resolved_at` timestamps.
+
+**Alert summary**
+```http
+GET /api/businesses/1/alerts/summary
+```
+Response `200`:
+```json
+{
+  "total": 4,
+  "unread": 3,
+  "read": 0,
+  "resolved": 1,
+  "critical": 1,
+  "high": 1,
+  "medium": 1,
+  "low": 1,
+  "info": 0
+}
+```
+
+**Scan report**
+```http
+GET /api/scans/1/report
+```
+Response `200` (shape): `scan_id`, `scan_status`, timestamps, `business_id/name`, `asset_id/domain`, `security_score`, `score_available`, `unavailable_reason`, `risk_assessment` (score/risk/grade/coverage/counts/priorities/recommendations when available), `scan_coverage`, `findings_total`, `findings_by_severity`, `findings[]` (id, check_code, title, description, severity, evidence, recommendation), `recommendations[]`.
+
+**CSV export**
+```http
+GET /api/scans/1/report.csv
+```
+Response `200` (`text/csv`): header + rows with scan/business/asset/score context and finding fields.
+
+**Asset historical reports**
+```http
+GET /api/assets/1/reports
+```
+Response `200`: asset/business identity and `scans[]` summaries with scan status, dates, `security_score`, `score_available`, `risk_level`, `grade`, `coverage_percent`, and finding counts.
+
+**Dashboard**
+```http
+GET /api/businesses/1/dashboard
+```
+Response `200`: `total_monitored_websites`, `active_websites`, `paused_websites`, `latest_scan`, `latest_security_scores`, `critical_security_findings`, `alert_counts`, `recent_security_activity`, `security_overview`.
 
 ## Testing
 
@@ -654,19 +805,38 @@ cd backend
 python -m unittest discover -s tests -v
 ```
 
+Run with the project virtual environment when dependencies are installed there:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
 - `tests/test_api.py`: foundation smoke tests (8) — starts uvicorn on `127.0.0.1:8765`.
 - `tests/test_database.py`: DB connection/tables/FK enforcement and model relationships (isolated temp SQLite).
-- `tests/test_business_asset_api.py`: business/asset API and validation (isolated temp SQLite via `TestClient`; requires `httpx` for Starlette/FastAPI `TestClient`).
+- `tests/test_business_asset_api.py`: business/asset API and validation (isolated temp SQLite via `TestClient`; requires `httpx`).
 - `tests/test_scanner_validators.py`: hostname validation, SSRF/IP safety, DNS resolution + pinning, redirect validation, pinned HTTP transport (37).
 - `tests/test_scanner_inspectors.py`: TLS, HTTPS, header and DNS inspectors with mocked network (28).
 - `tests/test_scan_manager.py`: orchestration, status transitions, failure handling and DB persistence with an isolated temp SQLite DB (10).
 - `tests/test_scan_api.py`: scan endpoints, authorization guards, lifecycle and history via `TestClient` with the network mocked (10).
 - `tests/test_risk_engine.py`: severity penalties, multiple/duplicate findings, minimum score, informational findings, unknown results, failed/incomplete scans, coverage, historical preservation, configurable weights, classification, priorities and scan-manager integration (29).
 - `tests/test_risk_api.py`: scan risk, asset risk, history, previous-score comparison, 404 handling and historical preservation via `TestClient` (12).
+- `tests/test_alerts_api.py`: automatic alert creation, severity classification, info exclusion, duplicate prevention, reappearing resolved issues, read/resolve, filtering, pagination, summary, and 404/422 handling (12).
+- `tests/test_reports_api.py`: scan report generation, findings/recommendations, missing-score handling, CSV export, historical asset reports, and missing-asset/scan handling (8).
+- `tests/test_dashboard_api.py`: dashboard counts, latest scan/overview, alert counts/activity, and empty/missing business handling (3).
 
 Tests use isolated temporary SQLite databases and must not modify local development data.
 Scanner tests never make real network requests: the resolver, TLS probe, HTTP transport and DNS query functions are injected or patched.
-Risk tests persist findings and check results directly and never call the network.
+Risk/report/alert/dashboard tests persist findings and check results directly and never call the network.
+
+## Known limitations (Stage 05)
+
+- **No authentication/authorization and not multi-tenant safe:** alert, report and dashboard endpoints are open and scoped only by IDs in the URL; they must not be presented as production-ready multi-tenant APIs.
+- **Alerts are in-app records only:** no email/SMS/push notifications, no scheduling, and no external delivery.
+- **Alert generation is scan-driven:** alerts are created when scans complete; there is no background remediation polling or automatic closure when a finding disappears (a reappearing resolved issue creates a new alert).
+- **Reports are JSON/CSV only:** no PDF reports.
+- **Dashboard aggregates stored data only:** it reflects latest completed assessments per asset and stored alerts; it does not trigger scans or recompute historical assessments.
+- **Existing scanner/risk limitations remain:** fixed passive check catalogue, single point-in-time observation, global scoring weights, immutable historical snapshots, and best-effort coverage semantics.
 
 ## Current security limitations
 
@@ -687,7 +857,7 @@ Risk tests persist findings and check results directly and never call the networ
 
 ## Out of scope (future stages)
 
-Authentication/login, password storage, alert generation logic, PDF reporting, payments, automated/scheduled scanning, and multi-tenant isolation are intentionally not implemented.
+Authentication/login, password storage, payment systems, email/SMS notifications, scheduled/automated monitoring, PDF reports, machine learning, multi-tenant isolation, and frontend modifications are intentionally not implemented.
 
 ## Running the scanner
 
@@ -716,3 +886,4 @@ Authentication/login, password storage, alert generation logic, PDF reporting, p
 The scan performs a bounded number of outbound requests (HTTPS/HTTP `GET /`,
 TLS handshake, and a few DNS TXT/CAA lookups). It never downloads response
 bodies and never follows redirects automatically.
+

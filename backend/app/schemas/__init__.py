@@ -1,5 +1,6 @@
 """Schema exports."""
 
+from app.schemas.alert import AlertListResponse, AlertResponse, AlertSummary, AlertUpdate
 from app.schemas.asset import AssetCreate, AssetResponse, AssetUpdate, normalize_domain
 from app.schemas.business import BusinessCreate, BusinessResponse
 from app.schemas.risk import (
@@ -14,6 +15,10 @@ from app.schemas.risk import (
 )
 
 __all__ = [
+    "AlertListResponse",
+    "AlertResponse",
+    "AlertSummary",
+    "AlertUpdate",
     "BusinessCreate",
     "BusinessResponse",
     "AssetCreate",

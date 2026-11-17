@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.schemas.business import BusinessCreate, BusinessResponse
-from app.services import business_service
+from app.schemas.dashboard import DashboardResponse
+from app.services import business_service, dashboard_service
 
 router = APIRouter(prefix="/api/businesses", tags=["Businesses"])
 
@@ -30,3 +31,14 @@ def get_business(business_id: int, db: Session = Depends(get_db)) -> BusinessRes
     if business is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Business not found")
     return business
+
+
+@router.get("/{business_id}/dashboard", response_model=DashboardResponse)
+def get_business_dashboard(
+    business_id: int, db: Session = Depends(get_db)
+) -> DashboardResponse:
+    try:
+        return dashboard_service.build_dashboard(db, business_id)
+    except dashboard_service.BusinessNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+

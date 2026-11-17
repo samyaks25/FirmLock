@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
 from app.schemas.asset import AssetCreate, AssetResponse, AssetUpdate
-from app.services import asset_service, business_service
+from app.schemas.report import AssetReportsResponse
+from app.services import asset_service, business_service, report_service
 
 router = APIRouter(tags=["Assets"])
 
@@ -52,6 +53,18 @@ def get_asset(asset_id: int, db: Session = Depends(get_db)) -> AssetResponse:
     return asset
 
 
+@router.get(
+    "/api/assets/{asset_id}/reports",
+    response_model=AssetReportsResponse,
+    summary="List historical scan report summaries for an asset",
+)
+def get_asset_reports(asset_id: int, db: Session = Depends(get_db)) -> AssetReportsResponse:
+    try:
+        return report_service.list_asset_reports(db, asset_id)
+    except report_service.AssetNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
 @router.patch("/api/assets/{asset_id}", response_model=AssetResponse)
 def update_asset(
     asset_id: int, payload: AssetUpdate, db: Session = Depends(get_db)
@@ -60,3 +73,4 @@ def update_asset(
     if asset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
     return asset_service.update_asset(db, asset, payload)
+

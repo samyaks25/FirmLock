@@ -8,40 +8,32 @@ Run from the ``backend`` directory:
 """
 
 import json
-import threading
+import os
+import socket
+import subprocess
+import sys
+import tempfile
 import time
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-import uvicorn
-
-from app.main import app
-
 HOST = "127.0.0.1"
-PORT = 8765
-BASE_URL = f"http://{HOST}:{PORT}"
 STARTUP_TIMEOUT_SECONDS = 20
 REQUEST_TIMEOUT_SECONDS = 5
 
-_server_thread: Optional["_ServerThread"] = None
+_server_proc: Optional[subprocess.Popen] = None
+_tmpdir: Optional[tempfile.TemporaryDirectory] = None
+_base_url: str = ""
 
 
-class _ServerThread(threading.Thread):
-    """Runs the FastAPI app with uvicorn in a background thread."""
-
-    def __init__(self) -> None:
-        super().__init__(daemon=True)
-        config = uvicorn.Config(app, host=HOST, port=PORT, log_level="warning")
-        self.server = uvicorn.Server(config)
-
-    def run(self) -> None:
-        self.server.run()
-
-    def stop(self) -> None:
-        self.server.should_exit = True
-        self.join(timeout=STARTUP_TIMEOUT_SECONDS)
+def _free_port() -> int:
+    """Return an available localhost TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((HOST, 0))
+        return int(sock.getsockname()[1])
 
 
 def _request(
@@ -51,7 +43,7 @@ def _request(
 ) -> Tuple[int, Any, str]:
     """Perform an HTTP request and always return (status, headers, body)."""
     request = urllib.request.Request(
-        BASE_URL + path, method=method, headers=headers or {}
+        _base_url + path, method=method, headers=headers or {}
     )
     try:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
@@ -61,27 +53,80 @@ def _request(
 
 
 def setUpModule() -> None:
-    """Start the test server once for the whole module."""
-    global _server_thread
-    _server_thread = _ServerThread()
-    _server_thread.start()
+    """Start the test server once in a subprocess using an isolated DB."""
+    global _server_proc, _tmpdir, _base_url
+
+    _tmpdir = tempfile.TemporaryDirectory()
+    db_path = Path(_tmpdir.name) / "smoke.db"
+    data_dir = Path(_tmpdir.name) / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    port = _free_port()
+    _base_url = f"http://{HOST}:{port}"
+
+    env = os.environ.copy()
+    env["FIRMLOCK_DATABASE_URL"] = f"sqlite:///{db_path.as_posix()}"
+    env["FIRMLOCK_DATA_DIR"] = str(data_dir)
+
+    backend_dir = str(Path(__file__).resolve().parents[1])
+    cmd = [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        HOST,
+        "--port",
+        str(port),
+        "--log-level",
+        "warning",
+    ]
+    _server_proc = subprocess.Popen(
+        cmd,
+        cwd=backend_dir,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
     deadline = time.time() + STARTUP_TIMEOUT_SECONDS
+    last_error: Optional[BaseException] = None
     while time.time() < deadline:
+        if _server_proc.poll() is not None:
+            raise RuntimeError(
+                f"Test server exited early with code {_server_proc.returncode} on {_base_url}"
+            )
         try:
             status, _, _ = _request("/api/health")
             if status == 200:
                 return
-        except OSError:
+        except OSError as error:
+            last_error = error
             time.sleep(0.2)
 
-    raise RuntimeError("Test server did not start in time")
+    raise RuntimeError(
+        f"Test server did not start in time on {_base_url}: {last_error}"
+    )
 
 
 def tearDownModule() -> None:
-    """Stop the test server."""
-    if _server_thread is not None:
-        _server_thread.stop()
+    """Stop the test server and clean temporary resources."""
+    global _server_proc, _tmpdir, _base_url
+
+    try:
+        if _server_proc is not None and _server_proc.poll() is None:
+            _server_proc.terminate()
+            try:
+                _server_proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                _server_proc.kill()
+                _server_proc.wait(timeout=5)
+    finally:
+        if _tmpdir is not None:
+            _tmpdir.cleanup()
+        _server_proc = None
+        _tmpdir = None
+        _base_url = ""
 
 
 class RootEndpointTests(unittest.TestCase):
@@ -118,6 +163,39 @@ class DocumentationTests(unittest.TestCase):
         schema = json.loads(body)
 
         self.assertEqual(status, 200)
+        self.assertIn("openapi", schema)
+
+
+class CorsTests(unittest.TestCase):
+    def test_localhost_origin_is_allowed(self) -> None:
+        status, headers, _ = _request("/api/health", headers={"Origin": "http://localhost:5173"})
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("access-control-allow-origin"), "http://localhost:5173")
+        self.assertEqual(headers.get("access-control-allow-credentials"), "true")
+
+    def test_loopback_origin_is_allowed(self) -> None:
+        status, headers, _ = _request("/api/health", headers={"Origin": "http://127.0.0.1:5173"})
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("access-control-allow-origin"), "http://127.0.0.1:5173")
+        self.assertEqual(headers.get("access-control-allow-credentials"), "true")
+
+    def test_preflight_request_is_answered(self) -> None:
+        status, headers, _ = _request(
+            "/api/health",
+            method="OPTIONS",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("access-control-allow-origin"), "http://localhost:5173")
+        self.assertIn("GET", headers.get("access-control-allow-methods", ""))
+
+    def test_unknown_origin_is_not_allowed(self) -> None:
+        status, headers, _ = _request("/api/health", headers={"Origin": "http://evil.example"})
+        self.assertEqual(status, 200)
+        self.assertIsNone(headers.get("access-control-allow-origin"))
         self.assertEqual(schema["info"]["title"], "FirmLock API")
 
 
