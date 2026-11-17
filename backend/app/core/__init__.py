@@ -1,0 +1,1 @@
+"""Core application package: configuration and shared building blocks."""
