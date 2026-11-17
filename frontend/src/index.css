@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+/* =================================
+   FIRMLOCK BRAND DESIGN SYSTEM
+================================= */
+
+:root {
+  font-family: Inter, system-ui, sans-serif;
+
+  color: #172536;
+  background: #F4F7FA;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --firm-navy: #101B2C;
+  --firm-teal: #36D6C4;
+  --firm-white: #F4F7FA;
+  --firm-amber: #F2B84B;
+
+  --firm-text: #172536;
+  --firm-muted: #718096;
+}
+
+/* Global reset */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
