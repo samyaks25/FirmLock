@@ -6,11 +6,18 @@ import { MyAssets } from './pages/MyAssets';
 import { SecurityScans } from './pages/SecurityScans';
 import { Alerts } from './pages/Alerts';
 import { Reports } from './pages/Reports';
+import { Login } from './pages/Login';
+import { Register } from './pages/Register';
+import { Onboarding } from './pages/Onboarding';
+import { AuthProvider, useAuth } from './auth/AuthContext';
 
-function App() {
+function AppShell() {
+  const { user, token, business, businessId, loading, logout } = useAuth();
   const [route, setRoute] = useState('/');
 
   const handleNavigate = (path: string) => setRoute(path);
+
+  const needsOnboarding = !loading && !!token && !businessId;
 
   const isAssets = route === '/assets';
   const isScans = route === '/scans';
@@ -35,13 +42,49 @@ function App() {
     ? 'Review and manage your website security assessment reports.'
     : 'Security posture overview and recent activity';
 
+  if (loading) return null;
+
   return (
     <div className="min-h-screen bg-[#F4F7FA]">
       <Sidebar onNavigate={handleNavigate} />
-      <Header title={page} description={desc} onMenuClick={() => {}} />
-      {isAssets ? <MyAssets /> : isScans ? <SecurityScans /> : isAlerts ? <Alerts /> : isReports ? <Reports /> : <Dashboard />}
+      <Header
+        title={page}
+        description={desc}
+        onMenuClick={() => {}}
+        user={user}
+        business={business}
+        onSignOut={logout}
+      />
+      {needsOnboarding ? <Onboarding /> : isAssets ? <MyAssets /> : isScans ? <SecurityScans /> : isAlerts ? <Alerts /> : isReports ? <Reports /> : <Dashboard />}
     </div>
   );
 }
 
-export default App;
+export default function App() {
+  const { loading, token } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#101B2C]">
+        <div className="flex flex-col items-center gap-3 text-white">
+          <div className="w-10 h-10 rounded-full bg-[#36D6C4] flex items-center justify-center text-[#101B2C] font-bold">F</div>
+          <p className="text-sm font-medium">Loading FirmLock...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!token) {
+    return (
+      <AuthProvider>
+        {window.location.pathname === '/register' ? <Register /> : <Login />}
+      </AuthProvider>
+    );
+  }
+
+  return (
+    <AuthProvider>
+      <AppShell />
+    </AuthProvider>
+  );
+}

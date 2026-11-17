@@ -5,8 +5,8 @@ export interface Scan {
   website: string;
   domain: string;
   date: string;
-  status: 'Completed' | 'In Progress' | 'Failed';
-  score: number;
+  status: string;
+  score: number | null;
   issues: number;
 }
 
@@ -53,7 +53,7 @@ export function ScanHistoryTable({ scans, search, statusFilter, onView }: Props)
                 <td className="px-6 py-4 text-sm text-[#718096]">{s.id}</td>
                 <td className="px-6 py-4 hidden md:table-cell text-sm text-[#718096]">{s.date}</td>
                 <td className="px-6 py-4 text-sm text-[#172536]">{s.status}</td>
-                <td className="px-6 py-4 hidden lg:table-cell text-sm font-medium text-[#101B2C]">{s.score}/100</td>
+                <td className="px-6 py-4 hidden lg:table-cell text-sm font-medium text-[#101B2C]">{s.score === null ? '—' : `${s.score}/100`}</td>
                 <td className="px-6 py-4 hidden lg:table-cell text-sm text-[#718096]">{s.issues}</td>
                 <td className="px-6 py-4 text-right">
                   <button onClick={() => onView(s)} className="px-3 py-1.5 text-xs rounded-lg bg-[#36D6C4]/10 text-[#36D6C4] hover:bg-[#36D6C4]/20">View Details</button>

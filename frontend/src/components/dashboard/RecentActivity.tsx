@@ -1,80 +1,20 @@
 import { ShieldCheck, AlertTriangle, Globe, CheckCircle, Clock, XCircle, Info } from 'lucide-react';
 
-interface ActivityItem {
+export type ActivitySeverity = 'info' | 'warning' | 'critical' | 'success';
+
+export interface ActivityItem {
   id: number;
-  type: 'scan_completed' | 'vulnerability_found' | 'scan_started' | 'certificate_expiring' | 'configuration_change';
+  type: string;
   title: string;
   description: string;
   asset: string;
   time: string;
-  severity: 'info' | 'warning' | 'critical' | 'success';
+  severity: ActivitySeverity;
 }
 
-const mockActivity: ActivityItem[] = [
-  {
-    id: 1,
-    type: 'scan_completed',
-    title: 'Security scan completed',
-    description: 'Full security scan completed for Primary Website with score 94/100',
-    asset: 'Primary Website',
-    time: '2 hours ago',
-    severity: 'success',
-  },
-  {
-    id: 2,
-    type: 'vulnerability_found',
-    title: 'Critical vulnerability detected',
-    description: 'SQL injection vulnerability found in Customer Portal login form',
-    asset: 'Customer Portal',
-    time: '3 hours ago',
-    severity: 'critical',
-  },
-  {
-    id: 3,
-    type: 'scan_started',
-    title: 'Scheduled scan initiated',
-    description: 'Weekly automated security scan started for API Gateway',
-    asset: 'API Gateway',
-    time: '4 hours ago',
-    severity: 'info',
-  },
-  {
-    id: 4,
-    type: 'certificate_expiring',
-    title: 'SSL certificate expiring soon',
-    description: 'SSL certificate for api.company.com expires in 14 days',
-    asset: 'API Gateway',
-    time: '5 hours ago',
-    severity: 'warning',
-  },
-  {
-    id: 5,
-    type: 'scan_completed',
-    title: 'Security scan completed',
-    description: 'Full security scan completed for Documentation Site with score 88/100',
-    asset: 'Documentation Site',
-    time: '6 hours ago',
-    severity: 'success',
-  },
-  {
-    id: 6,
-    type: 'configuration_change',
-    title: 'Security configuration updated',
-    description: 'WAF rules updated for Customer Portal - new rate limiting applied',
-    asset: 'Customer Portal',
-    time: '8 hours ago',
-    severity: 'info',
-  },
-  {
-    id: 7,
-    type: 'vulnerability_found',
-    title: 'Medium severity issue found',
-    description: 'Cross-site scripting (XSS) vulnerability in search parameter',
-    asset: 'API Gateway',
-    time: '12 hours ago',
-    severity: 'warning',
-  },
-];
+interface Props {
+  activities: ActivityItem[];
+}
 
 const getActivityConfig = (severity: ActivityItem['severity']) => {
   switch (severity) {
@@ -90,23 +30,28 @@ const getActivityConfig = (severity: ActivityItem['severity']) => {
   }
 };
 
-const getTypeIcon = (type: ActivityItem['type']) => {
-  switch (type) {
-    case 'scan_completed':
-    case 'scan_started':
-      return ShieldCheck;
-    case 'vulnerability_found':
-      return AlertTriangle;
-    case 'certificate_expiring':
-      return Clock;
-    case 'configuration_change':
-      return Globe;
-    default:
-      return ShieldCheck;
-  }
+const getTypeIcon = (type: string) => {
+  const t = type.toLowerCase();
+  if (t.includes('scan')) return ShieldCheck;
+  if (t.includes('vulnerability')) return AlertTriangle;
+  if (t.includes('certificate')) return Clock;
+  if (t.includes('configuration')) return Globe;
+  return ShieldCheck;
 };
 
-export function RecentActivity() {
+export function RecentActivity({ activities }: Props) {
+  if (activities.length === 0) {
+    return (
+      <div className="bg-white rounded-xl border border-[#E2E8F0] p-8 text-center text-[#718096]">
+        <div className="flex flex-col items-center gap-2">
+          <ShieldCheck className="w-8 h-8 text-[#E2E8F0]" aria-hidden="true" />
+          <p className="font-medium text-[#101B2C]">No recent activity</p>
+          <p className="text-sm mt-1">Activity will appear here as scans and alerts are generated.</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-xl border border-[#E2E8F0] overflow-hidden">
       <div className="px-6 py-4 border-b border-[#E2E8F0] flex items-center justify-between">
@@ -115,7 +60,7 @@ export function RecentActivity() {
       </div>
 
       <div className="divide-y divide-[#E2E8F0]/50">
-        {mockActivity.map((item) => {
+        {activities.map((item) => {
           const severityConfig = getActivityConfig(item.severity);
           const TypeIcon = getTypeIcon(item.type);
           const SeverityIcon = severityConfig.icon;

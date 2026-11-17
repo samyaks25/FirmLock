@@ -1,47 +1,89 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Globe, ShieldCheck, AlertTriangle, Clock, Plus, Search } from 'lucide-react';
+import { api } from '../api/client';
+import { useAuth } from '../auth/AuthContext';
 import { AssetSummaryCard } from '../components/assets/AssetSummaryCard';
 import { AssetTable, type Asset } from '../components/assets/AssetTable';
 import { AddAssetModal } from '../components/assets/AddAssetModal';
-
-const initialAssets: Asset[] = [
-  { id: 1, name: 'Primary Website', url: 'https://www.company.com', status: 'active', ssl: 'Valid (demo)', score: 94, lastScanned: '2 hours ago (demo)' },
-  { id: 2, name: 'API Gateway', url: 'https://api.company.com', status: 'warning', ssl: 'Expiring soon (demo)', score: 72, lastScanned: '4 hours ago (demo)' },
-  { id: 3, name: 'Customer Portal', url: 'https://portal.company.com', status: 'critical', ssl: 'Valid (demo)', score: 45, lastScanned: '1 hour ago (demo)' },
-  { id: 4, name: 'Documentation Site', url: 'https://docs.company.com', status: 'pending', ssl: 'Not yet checked (demo)', score: 0, lastScanned: 'Never (demo)' },
-];
+import type { AssetResponse } from '../types/backend';
 
 export function MyAssets() {
-  const [assets, setAssets] = useState<Asset[]>(initialAssets);
+  const { businessId } = useAuth();
+  const [assets, setAssets] = useState<Asset[]>([]);
   const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
-  const [loading] = useState(false);
-  const [error] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Asset | null>(null);
   const [scanning, setScanning] = useState<number | null>(null);
 
-  const addWebsite = (url: string) => {
-    const newAsset: Asset = {
-      id: Date.now(),
-      name: new URL(url).hostname,
-      url,
-      status: 'pending',
-      ssl: 'Not yet checked (demo)',
-      score: 0,
-      lastScanned: 'Never (demo)',
-    };
-    setAssets((prev) => [newAsset, ...prev]);
+  const loadAssets = useCallback(async () => {
+    if (!businessId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const list = await api.get<AssetResponse[]>(`/api/businesses/${businessId}/assets`);
+      setAssets(
+        list.map((a) => ({
+          id: a.id,
+          name: a.domain,
+          url: `https://${a.domain}`,
+          status: a.status === 'active' ? 'active' : 'warning',
+          ssl: undefined,
+          score: null,
+          lastScanned: a.last_scanned_at
+            ? new Date(a.last_scanned_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+            : 'Never',
+        })),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load assets.');
+    } finally {
+      setLoading(false);
+    }
+  }, [businessId]);
+
+  useEffect(() => {
+    if (!businessId) return;
+    (async () => {
+      await loadAssets();
+    })();
+  }, [businessId, loadAssets]);
+
+  const addWebsite = async (domain: string): Promise<void> => {
+    if (!businessId) throw new Error('No business selected.');
+    await api.post(`/api/businesses/${businessId}/assets`, { domain, authorization_confirmed: true });
+    await loadAssets();
   };
 
-  const handleScan = (id: number) => {
+  const handleScan = async (id: number) => {
     setScanning(id);
-    setTimeout(() => setScanning(null), 1200);
+    setError(null);
+    try {
+      await api.post(`/api/assets/${id}/scan`);
+      await loadAssets();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start scan.');
+    } finally {
+      setScanning(null);
+    }
   };
 
   const total = assets.length;
   const active = assets.filter((a) => a.status === 'active').length;
-  const expiring = assets.filter((a) => a.ssl.includes('Expiring')).length;
+  const expiring = assets.filter((a) => a.ssl?.includes('Expiring')).length;
   const notScanned = assets.filter((a) => a.lastScanned.startsWith('Never')).length;
+
+  if (!businessId) {
+    return (
+      <div className="min-h-screen bg-[#F4F7FA] md:ml-64">
+        <div className="p-4 md:p-6 md:ml-20">
+          <h1 className="text-2xl font-semibold text-[#101B2C]">My Assets</h1>
+          <p className="text-sm text-[#718096] mb-6">No business selected. Please select or create a business to manage assets.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F4F7FA]">
@@ -73,22 +115,21 @@ export function MyAssets() {
 
           {loading && <p className="text-[#718096] mb-4">Loading assets...</p>}
           {error && <p className="text-[#EF4444] mb-4">{error}</p>}
-          {assets.length === 0 && !loading && <p className="text-[#718096] mb-4">No assets registered yet.</p>}
+          {assets.length === 0 && !loading && !error && <p className="text-[#718096] mb-4">No assets registered yet. Add a website to start monitoring.</p>}
 
           <AssetTable assets={assets} search={search} onView={setSelected} onScan={handleScan} />
 
           {selected && (
             <div className="mt-4 bg-white rounded-xl border border-[#E2E8F0] p-4">
-              <h3 className="font-semibold text-[#101B2C] mb-2">Website Details (demo)</h3>
-              <p className="text-sm text-[#718096]">{selected.name} � {selected.url}</p>
-              <p className="text-sm text-[#718096]">Status: {selected.status} | Score: {selected.score}/100 | SSL: {selected.ssl}</p>
+              <h3 className="font-semibold text-[#101B2C] mb-2">Website Details</h3>
+              <p className="text-sm text-[#718096]">{selected.name} · {selected.url}</p>
+              <p className="text-sm text-[#718096]">Status: {selected.status} | Score: {selected.score === null || selected.score === undefined ? 'Not scored' : `${selected.score}/100`} | SSL: {selected.ssl ?? 'Not available'}</p>
               <button onClick={() => setSelected(null)} className="mt-2 text-sm text-[#36D6C4] hover:underline">Close</button>
             </div>
           )}
 
-          {scanning !== null && <p className="mt-4 text-sm text-[#718096]">Initial scan queued (demo) � no actual scan performed.</p>}
+          {scanning !== null && <p className="mt-4 text-sm text-[#718096]">Scan started for selected asset.</p>}
 
-          <p className="text-center text-sm text-[#718096] mt-8 pb-8">All data shown is demonstration/mock data for preview purposes.</p>
         </div>
       </div>
 

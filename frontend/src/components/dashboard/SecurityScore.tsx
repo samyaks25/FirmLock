@@ -2,9 +2,23 @@ interface SecurityScoreProps {
   score: number;
   maxScore?: number;
   label?: string;
+  scoreAvailable?: boolean;
+  passedChecks?: number;
+  failedChecks?: number;
+  warnings?: number;
+  info?: number;
 }
 
-export function SecurityScore({ score = 82, maxScore = 100, label = 'Security Score' }: SecurityScoreProps) {
+export function SecurityScore({
+  score = 0,
+  maxScore = 100,
+  label = 'Security Score',
+  scoreAvailable = true,
+  passedChecks,
+  failedChecks,
+  warnings,
+  info,
+}: SecurityScoreProps) {
   const percentage = Math.min((score / maxScore) * 100, 100);
   const circumference = 2 * Math.PI * 54;
   const strokeDashoffset = circumference - (percentage / 100) * circumference;
@@ -49,30 +63,36 @@ export function SecurityScore({ score = 82, maxScore = 100, label = 'Security Sc
                 strokeWidth="8"
                 strokeLinecap="round"
                 strokeDasharray={circumference}
-                strokeDashoffset={strokeDashoffset}
+                strokeDashoffset={scoreAvailable ? strokeDashoffset : circumference}
                 className="transition-all duration-1000 ease-out"
                 aria-hidden="true"
               />
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-4xl md:text-5xl font-bold text-[#101B2C]">{score}</span>
+              <span className="text-4xl md:text-5xl font-bold text-[#101B2C]">
+                {scoreAvailable ? score : '—'}
+              </span>
               <span className="text-sm text-[#718096]">/ {maxScore}</span>
             </div>
           </div>
           <div>
             <h3 className="text-lg font-semibold text-[#101B2C]">{label}</h3>
-            <p className="text-sm text-[#718096] mt-1">Last updated 2 hours ago</p>
+            <p className="text-sm text-[#718096] mt-1">
+              {scoreAvailable ? 'Last updated from latest completed assessments' : 'No completed scan with sufficient coverage yet'}
+            </p>
             <div className="mt-3 flex items-center gap-2">
               <span
                 className={`px-3 py-1 rounded-full text-sm font-medium ${
-                  score >= 80
-                    ? 'bg-[#22C55E]/10 text-[#22C55E]'
-                    : score >= 60
-                    ? 'bg-[#F2B84B]/10 text-[#F2B84B]'
-                    : 'bg-[#EF4444]/10 text-[#EF4444]'
+                  scoreAvailable
+                    ? score >= 80
+                      ? 'bg-[#22C55E]/10 text-[#22C55E]'
+                      : score >= 60
+                      ? 'bg-[#F2B84B]/10 text-[#F2B84B]'
+                      : 'bg-[#EF4444]/10 text-[#EF4444]'
+                    : 'bg-[#718096]/10 text-[#718096]'
                 }`}
               >
-                {scoreLabel}
+                {scoreAvailable ? scoreLabel : 'Not available'}
               </span>
             </div>
           </div>
@@ -80,19 +100,19 @@ export function SecurityScore({ score = 82, maxScore = 100, label = 'Security Sc
 
         <div className="flex-1 grid grid-cols-2 gap-4 md:gap-6 pt-4 md:pt-0 border-t md:border-t-0 md:border-l border-[#E2E8F0]">
           <div className="text-center p-4 bg-[#F4F7FA] rounded-lg">
-            <p className="text-2xl font-bold text-[#101B2C]">12</p>
+            <p className="text-2xl font-bold text-[#101B2C]">{scoreAvailable && passedChecks != null ? passedChecks : '—'}</p>
             <p className="text-sm text-[#718096] mt-1">Passed Checks</p>
           </div>
           <div className="text-center p-4 bg-[#F4F7FA] rounded-lg">
-            <p className="text-2xl font-bold text-[#EF4444]">3</p>
+            <p className="text-2xl font-bold text-[#EF4444]">{scoreAvailable && failedChecks != null ? failedChecks : '—'}</p>
             <p className="text-sm text-[#718096] mt-1">Failed Checks</p>
           </div>
           <div className="text-center p-4 bg-[#F4F7FA] rounded-lg">
-            <p className="text-2xl font-bold text-[#F2B84B]">5</p>
+            <p className="text-2xl font-bold text-[#F2B84B]">{scoreAvailable && warnings != null ? warnings : '—'}</p>
             <p className="text-sm text-[#718096] mt-1">Warnings</p>
           </div>
           <div className="text-center p-4 bg-[#F4F7FA] rounded-lg">
-            <p className="text-2xl font-bold text-[#36D6C4]">2</p>
+            <p className="text-2xl font-bold text-[#36D6C4]">{scoreAvailable && info != null ? info : '—'}</p>
             <p className="text-sm text-[#718096] mt-1">Info</p>
           </div>
         </div>

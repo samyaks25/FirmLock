@@ -55,7 +55,7 @@ export function StartScanModal({ open, onClose, assets, onStart }: Props) {
             <span>I own or am authorised to assess the selected website.</span>
           </label>
           {error && <p className="text-sm text-[#EF4444]">{error}</p>}
-          <p className="text-xs text-[#718096]">This is a demo simulation only. No actual security scanning will be performed.</p>
+          <p className="text-xs text-[#718096]">Scans are read-only security assessments of authorised assets.</p>
         </div>
         <div className="flex items-center justify-end gap-2 p-5 border-t border-[#E2E8F0]">
           <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-[#E2E8F0] hover:bg-[#F4F7FA]">Cancel</button>

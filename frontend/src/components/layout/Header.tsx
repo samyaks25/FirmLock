@@ -1,17 +1,26 @@
 import { Bell, User, Menu, LogOut, ChevronDown, Settings } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
+import type { UserResponse } from '../../types/backend';
+import type { BusinessResponse } from '../../types/backend';
+import { useAuth } from '../../auth/AuthContext';
 
 interface HeaderProps {
   title: string;
   description?: string;
   onMenuClick?: () => void;
+  user: UserResponse | null;
+  business: BusinessResponse | null;
+  onSignOut: () => void;
 }
 
-export function Header({ title, description, onMenuClick }: HeaderProps) {
+export function Header({ title, description, onMenuClick, user, business, onSignOut }: HeaderProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [switchOpen, setSwitchOpen] = useState(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
+
+  const { businesses, selectBusiness } = useAuth();
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -20,6 +29,7 @@ export function Header({ title, description, onMenuClick }: HeaderProps) {
       }
       if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
         setUserMenuOpen(false);
+        setSwitchOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -116,30 +126,55 @@ export function Header({ title, description, onMenuClick }: HeaderProps) {
               <div className="w-8 h-8 rounded-full bg-[#36D6C4] flex items-center justify-center">
                 <User className="w-4 h-4 text-[#101B2C]" aria-hidden="true" />
               </div>
-              <span className="hidden md:block text-sm font-medium text-[#172536]">John Doe</span>
+              <span className="hidden md:block text-sm font-medium text-[#172536]">{user?.full_name ?? user?.email ?? 'User'}</span>
               <ChevronDown className="w-4 h-4 text-[#718096] hidden md:block" aria-hidden="true" />
             </button>
 
             {userMenuOpen && (
               <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-[#E2E8F0] py-2 z-50 animate-in fade-in-0 zoom-in-95">
-                <div className="px-4 py-3 border-b border-[#E2E8F0]">
-                  <p className="font-medium text-[#101B2C]">John Doe</p>
-                  <p className="text-sm text-[#718096]">john@company.com</p>
-                  <p className="text-xs text-[#36D6C4] mt-1">Admin</p>
-                </div>
-                <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-[#172536] hover:bg-[#F4F7FA] transition-colors">
-                  <User className="w-4 h-4" aria-hidden="true" />
-                  Profile
-                </button>
-                <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-[#172536] hover:bg-[#F4F7FA] transition-colors">
-                  <Settings className="w-4 h-4" aria-hidden="true" />
-                  Settings
-                </button>
-                <div className="border-t border-[#E2E8F0] my-2" />
-                <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-[#EF4444] hover:bg-[#F4F7FA] transition-colors">
-                  <LogOut className="w-4 h-4" aria-hidden="true" />
-                  Sign out
-                </button>
+              <div className="px-4 py-3 border-b border-[#E2E8F0]">
+                <p className="font-medium text-[#101B2C]">{user?.full_name ?? user?.email ?? 'User'}</p>
+                <p className="text-sm text-[#718096]">{user?.email}</p>
+                {business && (
+                  <p className="text-xs text-[#36D6C4] mt-1">{business.name}</p>
+                )}
+                {businesses.length > 1 && (
+                  <>
+                    <button
+                      onClick={() => setSwitchOpen(!switchOpen)}
+                      className="w-full text-left text-xs text-[#36D6C4] hover:bg-[#F4F7FA] mt-1 px-2 py-1 rounded"
+                    >
+                      {switchOpen ? 'Hide business list' : 'Switch business'}
+                    </button>
+                    {switchOpen && (
+                      <div className="space-y-1 mt-1">
+                        {businesses.map((b) => (
+                          <button
+                            key={b.id}
+                            onClick={() => { selectBusiness(b.id); setSwitchOpen(false); }}
+                            className={`w-full text-left text-xs px-2 py-1.5 rounded hover:bg-[#F4F7FA] text-[#36D6C4] ${b.id === business?.id ? 'font-medium' : ''}`}
+                          >
+                            {b.name}{b.id === business?.id ? ' (current)' : ''}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-[#172536] hover:bg-[#F4F7FA] transition-colors">
+                <User className="w-4 h-4" aria-hidden="true" />
+                Profile
+              </button>
+              <button className="w-full flex items-center gap-2 px-4 py-2 text-sm text-[#172536] hover:bg-[#F4F7FA] transition-colors">
+                <Settings className="w-4 h-4" aria-hidden="true" />
+                Settings
+              </button>
+              <div className="border-t border-[#E2E8F0] my-2" />
+              <button onClick={onSignOut} className="w-full flex items-center gap-2 px-4 py-2 text-sm text-[#EF4444] hover:bg-[#F4F7FA] transition-colors">
+                <LogOut className="w-4 h-4" aria-hidden="true" />
+                Sign out
+              </button>
               </div>
             )}
           </div>

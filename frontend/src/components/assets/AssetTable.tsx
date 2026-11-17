@@ -1,4 +1,4 @@
-import { Globe, MoreHorizontal, ExternalLink } from 'lucide-react';
+import { Globe, MoreHorizontal } from 'lucide-react';
 import { AssetStatusBadge } from './AssetStatusBadge';
 
 export interface Asset {
@@ -6,8 +6,8 @@ export interface Asset {
   name: string;
   url: string;
   status: 'active' | 'warning' | 'critical' | 'pending';
-  ssl: string;
-  score: number;
+  ssl?: string;
+  score?: number | null;
   lastScanned: string;
 }
 
@@ -52,8 +52,8 @@ export function AssetTable({ assets, search, onView, onScan }: Props) {
                   </div>
                 </td>
                 <td className="px-6 py-4"><AssetStatusBadge status={a.status} /></td>
-                <td className="px-6 py-4 hidden md:table-cell text-sm text-[#718096]">{a.ssl}</td>
-                <td className="px-6 py-4 hidden lg:table-cell text-sm font-medium text-[#101B2C]">{a.score}/100</td>
+                <td className="px-6 py-4 hidden md:table-cell text-sm text-[#718096]">{a.ssl ?? 'Not available'}</td>
+                <td className="px-6 py-4 hidden lg:table-cell text-sm font-medium text-[#101B2C]">{a.score === null || a.score === undefined ? 'Not scored' : `${a.score}/100`}</td>
                 <td className="px-6 py-4 hidden lg:table-cell text-sm text-[#718096]">{a.lastScanned}</td>
                 <td className="px-6 py-4 text-right flex items-center justify-end gap-1">
                   <button onClick={() => onView(a)} className="px-2 py-1 text-xs rounded border border-[#E2E8F0] hover:bg-[#F4F7FA]">View</button>
@@ -66,9 +66,6 @@ export function AssetTable({ assets, search, onView, onScan }: Props) {
             ))}
           </tbody>
         </table>
-      </div>
-      <div className="px-6 py-3 border-t border-[#E2E8F0] text-xs text-[#718096] flex items-center gap-1">
-        <ExternalLink className="w-3 h-3" /> Demonstration data only.
       </div>
     </div>
   );
