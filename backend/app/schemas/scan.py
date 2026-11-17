@@ -32,6 +32,10 @@ class ScanResponse(BaseModel):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     created_at: datetime
+    celery_task_id: Optional[str] = None
+    queue_timestamp: Optional[datetime] = None
+    attempt_count: int = 0
+    worker_metadata: Optional[dict] = None
     findings: List[FindingResponse] = Field(default_factory=list)
 
 

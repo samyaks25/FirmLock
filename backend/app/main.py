@@ -20,6 +20,7 @@ from app.core.logging import get_logger, setup_secure_logging
 from app.core.request_size import RequestSizeLimitMiddleware, get_request_size_limit
 from app.core.security_headers import SecurityHeadersMiddleware, get_hsts_config
 from app.core.trusted_host import TrustedHostMiddleware, get_allowed_hosts
+from app.core.worker_health import get_worker_health
 from app.database.connection import check_migration_version
 
 # Configure secure logging with sensitive data redaction
@@ -145,6 +146,28 @@ def create_app() -> FastAPI:
                 "up_to_date": is_up_to_date,
                 "message": migration_message,
             },
+        }
+
+    @application.get("/api/health/workers", tags=["Health"], summary="Worker infrastructure health")
+    def worker_health_check() -> Dict[str, Any]:
+        """Return worker infrastructure health.
+
+        In inline scan execution mode this reports that Redis/Celery workers are
+        not required and never attempts to connect to Redis.
+        """
+        health = get_worker_health()
+        return {
+            "mode": settings.scan_execution_mode,
+            "redis": {
+                "available": health.redis_available,
+                "error": health.redis_error,
+            },
+            "workers": {
+                "online": health.workers_online,
+                "error": health.workers_error,
+            },
+            "queues": health.queues,
+            "queues_error": health.queues_error,
         }
 
     application.include_router(api_router)

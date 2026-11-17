@@ -1425,29 +1425,400 @@ Payment systems, email/SMS notifications, scheduled/automated monitoring, PDF re
 
 ## Running the scanner
 
-1. Register a business and an authorised asset (see the asset endpoints above).
+### Local demo mode (Windows, no Redis/Docker/Celery worker)
+
+`FIRMLOCK_SCAN_EXECUTION_MODE` controls scan execution:
+- `inline` (default): runs scans in-process via FastAPI `BackgroundTasks` using the existing scan manager and a fresh database session. No Redis, Docker, Ubuntu, or Celery worker required.
+- `celery`: preserves the existing Redis-backed Celery worker execution path.
+
+PowerShell (from `backend/`):
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+
+$env:FIRMLOCK_SCAN_EXECUTION_MODE = "inline"
+$env:FIRMLOCK_JWT_SECRET = "dev-secret-change-in-production-32chars"
+# Optional: local SQLite DB
+# $env:FIRMLOCK_DATABASE_URL = "sqlite:///./data/firmlock.db"
+
+alembic upgrade head
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Notes:
+- `POST /api/assets/{asset_id}/scan` returns `202 Accepted`; in inline mode the scan runs in the background inside the API process. Poll `GET /api/scans/{scan_id}` until status is `completed` or `failed`.
+- Inline mode does not connect to Redis and does not require Docker, Ubuntu, or a Celery worker. `GET /api/health/workers` reports `mode: "inline"`.
+- Real scanner findings, risk assessments, and alerts are produced by the existing scan pipeline (no fake/sample results).
+
+### Scan API usage
+
+1. Register/login and create a business and an authorised, active asset.
 2. Start a scan:
 
    ```powershell
-   curl -X POST http://127.0.0.1:8000/api/assets/1/scan
+   curl -X POST http://127.0.0.1:8000/api/assets/1/scan -H "Authorization: Bearer <token>"
    ```
 
 3. Poll the scan until it completes and read the findings:
 
    ```powershell
-   curl http://127.0.0.1:8000/api/scans/1
-   curl http://127.0.0.1:8000/api/assets/1/scans
+   curl http://127.0.0.1:8000/api/scans/1 -H "Authorization: Bearer <token>"
+   curl http://127.0.0.1:8000/api/assets/1/scans -H "Authorization: Bearer <token>"
    ```
 
 4. Read the risk assessment and score:
 
    ```powershell
-   curl http://127.0.0.1:8000/api/scans/1/risk
-   curl http://127.0.0.1:8000/api/assets/1/risk
-   curl http://127.0.0.1:8000/api/assets/1/risk/history
+   curl http://127.0.0.1:8000/api/scans/1/risk -H "Authorization: Bearer <token>"
+   curl http://127.0.0.1:8000/api/assets/1/risk -H "Authorization: Bearer <token>"
+   curl http://127.0.0.1:8000/api/assets/1/risk/history -H "Authorization: Bearer <token>"
    ```
 
 The scan performs a bounded number of outbound requests (HTTPS/HTTP `GET /`,
 TLS handshake, and a few DNS TXT/CAA lookups). It never downloads response
 bodies and never follows redirects automatically.
+
+## Stage 07C: Background Workers and Scan Reliability
+
+This stage replaces in-process FastAPI background tasks with **Celery distributed
+task queue** using Redis as the message broker. This provides reliable,
+scalable background scan execution with automatic retries, failure recovery,
+and worker monitoring.
+
+### Architecture overview
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   API       │     │   Redis     │     │  Celery     │
+│  Process    │────▶│  (Broker)   │────▶│  Workers    │
+│             │     │             │     │             │
+│ • Validate  │     │ • Queue     │     │ • Execute   │
+│   asset     │     │   scan jobs │     │   scans     │
+│ • Create    │     │ • Results   │     │ • Retry on  │
+│   Scan row  │     │   backend   │     │   failure   │
+│ • Enqueue   │     │ • Pub/sub   │     │ • Persist   │
+│   job       │     │   monitor   │     │   results   │
+└─────────────┘     └─────────────┘     └─────────────┘
+```
+
+### Key changes from Stage 07B
+
+| Aspect | Stage 07B (FastAPI BackgroundTasks) | Stage 07C (Celery + Redis) |
+|--------|-------------------------------------|----------------------------|
+| **Queue** | In-process, lost on restart | Persistent Redis queues |
+| **Concurrency** | In-process semaphore (2) | Worker concurrency (configurable) |
+| **Retries** | None | Exponential backoff, max 3 attempts |
+| **Failure recovery** | Manual only | Automatic stuck scan detection |
+| **Worker monitoring** | None | `/api/health/workers` endpoint |
+| **Graceful shutdown** | Not supported | SIGTERM handling, task completion |
+| **Idempotency** | Best-effort | Database-level + task-level |
+
+### Background worker architecture
+
+#### Celery configuration (`app/core/celery_config.py`)
+
+Modular Celery setup with environment-driven configuration:
+
+```python
+# Lazy initialization - only creates app when needed
+celery_app = get_celery_app()
+```
+
+Key settings:
+- **Broker/Backend**: Redis via `FIRMLOCK_REDIS_URL`
+- **Serialization**: JSON only (security)
+- **Concurrency**: `FIRMLOCK_CELERY_WORKER_CONCURRENCY` (default 2)
+- **Time limits**: Hard 300s, soft 240s (configurable)
+- **Reliability**: Late ack, reject on worker lost, prefetch=1
+- **Queue**: Dedicated `scans` queue
+
+#### Scan task (`app/tasks/scan_tasks.py`)
+
+```python
+@celery_app.task(
+    bind=True,
+    base=ScanTask,
+    name="app.tasks.scan_tasks.execute_scan",
+    queue="scans",
+)
+def execute_scan(self, scan_id: int) -> dict:
+    # 1. Idempotency check - skip completed/failed scans
+    # 2. Update scan with task_id, attempt_count, worker_metadata
+    # 3. Run scan via scan_manager (own DB session)
+    # 4. Handle retries for transient failures
+    # 5. Permanent failures (validation) not retried
+```
+
+**Task features:**
+- **Idempotency**: Checks scan status before execution; skips `completed`/`failed`
+- **Retry logic**: Exponential backoff (60s, 120s, 240s...) for transient failures
+- **Permanent failure detection**: Validation errors (SSRF, invalid target) not retried
+- **Timeout handling**: Soft/hard limits mark scan as failed
+- **Graceful shutdown**: SIGTERM/SIGINT handlers finish current task
+- **Worker metadata**: Records hostname, PID, retry count
+
+#### Recovery task
+
+```python
+@celery_app.task(name="app.tasks.scan_tasks.recover_stuck_scans")
+def recover_stuck_scans() -> dict:
+    # Finds scans stuck in 'running'/'pending' > 10 min
+    # Resets to 'pending' for re-execution
+    # Run periodically via Celery Beat (production) or manually
+```
+
+### Scan lifecycle with Celery
+
+1. **Request**: `POST /api/assets/{asset_id}/scan`
+2. **Validate**: Asset exists, authorized, active, monitoring enabled
+3. **Persist**: Create `Scan` row with `status="pending"`
+4. **Enqueue**: `execute_scan.delay(scan_id)` → returns Celery task ID
+5. **Response**: `202 Accepted` with `scan_id`, `asset_id`, `status="pending"`
+6. **Worker picks up**: Updates scan to `running`, records `started_at`
+7. **Execute**: Runs `scan_manager.run_scan()` with own DB session
+8. **Complete**: Stores findings, check results, risk assessment
+9. **Finalize**: Sets `status="completed"`/`"failed"`, records `completed_at`
+10. **Poll**: Frontend calls `GET /api/scans/{scan_id}` until terminal state
+
+### Database changes (Alembic migration `f4db046b7508`)
+
+Added to `Scan` model:
+| Column | Type | Purpose |
+|--------|------|---------|
+| `celery_task_id` | String(100) | Celery task UUID for tracking |
+| `queue_timestamp` | DateTime | When task was enqueued |
+| `attempt_count` | Integer | Execution attempt number (1+) |
+| `worker_metadata` | JSON | Hostname, PID, retry info |
+
+Preserves all existing scan history, findings, alerts, risk assessments.
+
+### Retry strategy
+
+| Failure type | Retry? | Backoff | Max attempts |
+|--------------|--------|---------|--------------|
+| Network timeout | Yes | Exponential (60s base) | 3 |
+| Connection refused | Yes | Exponential | 3 |
+| DNS resolution | Yes | Exponential | 3 |
+| Target validation (SSRF/invalid) | **No** | — | — |
+| Asset not found | **No** | — | — |
+| Authorization failure | **No** | — | — |
+| Unknown exception | Yes (safe default) | Exponential | 3 |
+
+**Configuration:**
+```env
+FIRMLOCK_CELERY_MAX_RETRIES=3
+FIRMLOCK_CELERY_RETRY_BASE_DELAY=60
+FIRMLOCK_CELERY_TASK_TIME_LIMIT=300
+FIRMLOCK_CELERY_TASK_SOFT_TIME_LIMIT=240
+```
+
+### Failure recovery
+
+#### Automatic stuck scan detection
+
+Scans can become stuck in `running` or `pending` state due to:
+- Worker crash/restart mid-scan
+- Process killed (OOM, SIGKILL)
+- Infrastructure failure
+
+The `recover_stuck_scans` task:
+- Runs periodically (recommended: every 5 min via Celery Beat)
+- Finds scans with `started_at` > 10 minutes ago in non-terminal state
+- Resets to `pending`, clears `celery_task_id`, `started_at`
+- Returns recovery statistics
+
+#### Graceful worker shutdown
+
+Workers handle `SIGTERM`/`SIGINT`:
+1. Signal received → set `_shutdown_requested = True`
+2. Finish current task (if running)
+3. Don't pick up new tasks
+4. Exit cleanly
+
+Tasks already picked up by a dying worker are requeued by Celery (`task_reject_on_worker_lost=True`).
+
+### Worker monitoring
+
+#### Health endpoint
+
+```http
+GET /api/health/workers
+```
+
+Response:
+```json
+{
+  "redis": {"available": true, "error": null},
+  "workers": {"online": 2, "error": null},
+  "queues": {"worker1@host": ["scans"], "worker2@host": ["scans"]},
+  "queues_error": null
+}
+```
+
+- **Graceful degradation**: API starts without Redis; endpoint reports unavailability
+- **No credentials exposed**: Only connection status, not URLs
+- **Queue depth**: Available via `get_queue_depth("scans")`
+
+#### Application logs
+
+Key log events (logger: `firmlock.tasks`):
+- Task started: `INFO "Starting scan {id} (attempt {n})"`
+- Task completed: `INFO "Scan {id} completed successfully"`
+- Retry triggered: `INFO "Scan {id} transient failure, will retry (attempt {n}/{max})"`
+- Permanent failure: `ERROR "Scan {id} permanent failure, not retrying: {error}"`
+- Recovery: `INFO "Recovering stuck scan {id} (status: {status})"`
+
+### Environment configuration
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `FIRMLOCK_REDIS_URL` | **required** | Redis connection (e.g., `redis://localhost:6379/0`) |
+| `FIRMLOCK_CELERY_WORKER_CONCURRENCY` | `2` | Worker processes/threads |
+| `FIRMLOCK_CELERY_TASK_TIME_LIMIT` | `300` | Hard timeout (seconds) |
+| `FIRMLOCK_CELERY_TASK_SOFT_TIME_LIMIT` | `240` | Soft timeout (seconds) |
+| `FIRMLOCK_CELERY_MAX_RETRIES` | `3` | Max retry attempts |
+| `FIRMLOCK_CELERY_RETRY_BASE_DELAY` | `60` | Base retry delay (seconds) |
+
+### Installation and execution
+
+#### Development dependencies
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+```
+
+#### Redis setup (Docker)
+
+```powershell
+# Start Redis (bind 127.0.0.1 only, persistent volume, AOF enabled)
+docker run -d --name firmlock-redis -p 127.0.0.1:6379:6379 -v firmlock-redis-data:/data redis:7-alpine redis-server --appendonly yes
+
+# Verify
+docker exec firmlock-redis redis-cli ping
+# Should return PONG
+```
+
+#### Database migrations
+
+```powershell
+$env:FIRMLOCK_DATABASE_URL = "sqlite:///backend/data/firmlock.db"
+$env:FIRMLOCK_REDIS_URL = "redis://localhost:6379/0"
+alembic upgrade head
+```
+
+#### Run API server
+
+```powershell
+$env:FIRMLOCK_REDIS_URL = "redis://localhost:6379/0"
+$env:FIRMLOCK_JWT_SECRET = "your-32-char-secret-key-here"
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+#### Run Celery worker (Windows development)
+
+```powershell
+$env:FIRMLOCK_REDIS_URL = "redis://localhost:6379/0"
+$env:FIRMLOCK_JWT_SECRET = "your-32-char-secret-key-here"
+
+# Use solo pool for Windows compatibility
+celery -A app.core.celery_config get_celery_app worker --pool=solo --loglevel=info --queues=scans
+```
+
+**Production Linux worker:**
+```bash
+# Use prefork pool for production (Linux)
+celery -A app.core.celery_config get_celery_app worker --pool=prefork --concurrency=4 --loglevel=info --queues=scans
+```
+
+#### Run recovery task manually
+
+```powershell
+celery -A app.core.celery_config get_celery_app call app.tasks.scan_tasks.recover_stuck_scans
+```
+
+#### Check worker health
+
+```powershell
+curl http://127.0.0.1:8000/api/health/workers
+```
+
+### Known limitations
+
+| Limitation | Details |
+|------------|---------|
+| **Windows pool** | Must use `--pool=solo` or `--pool=threads` on Windows; `prefork` not supported |
+| **Redis required** | API starts without Redis but scans won't queue; worker health reports unavailable |
+| **Single queue** | All scans use `scans` queue; no priority queues yet |
+| **No Celery Beat** | Periodic recovery task must be scheduled externally (cron, systemd, Windows Task Scheduler) |
+| **In-memory rate limits** | Unchanged from Stage 07B; not shared across workers |
+| **Result backend** | Uses Redis; results expire after 1 hour |
+| **No horizontal scaling demo** | Multiple workers work but require shared Redis and proper deployment |
+
+### Files created/modified
+
+**Created:**
+- `app/core/celery_config.py` — Celery configuration
+- `app/core/worker_health.py` — Worker monitoring utilities
+- `app/tasks/__init__.py` — Tasks package
+- `app/tasks/scan_tasks.py` — Scan execution and recovery tasks
+- `migrations/versions/f4db046b7508_add_celery_task_tracking_fields_to_scan_.py` — Alembic migration
+
+**Modified:**
+- `app/models/models.py` — Added Celery fields to Scan model
+- `app/schemas/scan.py` — Added fields to ScanResponse
+- `app/services/scanner/scan_manager.py` — Removed in-process semaphore, added idempotency
+- `app/api/routes/scans.py` — Replaced BackgroundTasks with Celery enqueue
+- `app/main.py` — Added `/api/health/workers` endpoint
+- `app/core/config.py` — Added Redis/Celery settings
+- `requirements.txt` — Added `celery>=5.3`, `redis>=5.0`
+- `requirements-dev.txt` — Added `pytest-mock`, `fakeredis`
+- `tests/conftest.py` — Mock Celery for tests
+- `tests/test_scan_api.py` — Updated tests for Celery mock
+
+### Testing
+
+All 278 tests pass:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+Test coverage includes:
+- Scan job creation and enqueue (202 response)
+- Redis unavailable handling (503 response)
+- Worker execution (pending → running → completed/failed)
+- Failed task handling and retry behavior
+- Duplicate task delivery (idempotency)
+- Duplicate finding/alert prevention (database constraints)
+- Interrupted scan recovery
+- Graceful shutdown
+- Existing scan/risk/alert/report APIs (regression)
+
+**Integration tests (optional, require Redis):**
+```powershell
+# With Redis running
+.\.venv\Scripts\python.exe -m pytest tests/ -v -k "not unit"
+```
+
+### Production deployment notes
+
+1. **Redis**: Use managed Redis (AWS ElastiCache, Azure Cache) with TLS
+2. **Workers**: Run as systemd services or Kubernetes deployments
+3. **Monitoring**: Alert on `/api/health/workers` redis_available=false or workers_online=0
+4. **Recovery**: Schedule `recover_stuck_scans` via Celery Beat or cron (every 5 min)
+5. **Secrets**: `FIRMLOCK_REDIS_URL` and `FIRMLOCK_JWT_SECRET` from secret manager
+6. **Logs**: Aggregate `firmlock.tasks` logger to observability platform
+7. **Queue depth**: Monitor scan queue length for capacity planning
+
+## Out of scope (future stages)
+
+Payment systems, email/SMS notifications, scheduled/automated monitoring, PDF reports, machine learning, and frontend modifications are intentionally not implemented.
 

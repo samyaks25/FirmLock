@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.api.rate_limit import scan_rate_limit
+from app.core.config import settings
 from app.database.connection import get_db
 from app.models.models import Asset, Scan, User
 from app.schemas.report import ScanReportResponse
@@ -40,7 +41,7 @@ def start_scan(
     """Queue a read-only security scan for an authorised, active asset.
 
     Returns ``202 Accepted`` with the new scan ID and ``pending`` status. The
-    scan itself runs in a FastAPI background task with its own DB session.
+    scan runs in the configured execution mode with its own DB session.
     """
     asset = db.get(Asset, asset_id)
     if asset is None:
@@ -68,8 +69,35 @@ def start_scan(
     db.commit()
     db.refresh(scan)
 
-    logger.info("Queued scan %s for asset %s (%s)", scan.id, asset_id, asset.domain)
-    background_tasks.add_task(run_scan, scan.id)
+    logger.info(
+        "Queued scan %s for asset %s (%s) in %s mode",
+        scan.id,
+        asset_id,
+        asset.domain,
+        settings.scan_execution_mode,
+    )
+
+    try:
+        if settings.scan_execution_mode == "inline":
+            scan.queue_timestamp = scan.created_at
+            db.commit()
+            background_tasks.add_task(run_scan, scan.id)
+        else:
+            from app.tasks.scan_tasks import execute_scan
+
+            task = execute_scan.delay(scan.id)
+            scan.celery_task_id = task.id
+            scan.queue_timestamp = scan.created_at  # Approximate; refined by worker
+            db.commit()
+    except Exception as exc:
+        logger.exception("Failed to enqueue scan %s: %s", scan.id, exc)
+        scan.status = "failed"
+        scan.completed_at = scan.created_at
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Scan queue unavailable. Please try again later.",
+        )
 
     return ScanAcceptedResponse(scan_id=scan.id, asset_id=asset_id, status=scan.status)
 

@@ -10,14 +10,12 @@ Responsibilities:
       always record ``started_at`` / ``completed_at``.
 
 A background scan uses its own database session (never the request session) and
-is serialised through a small semaphore so the process never performs
-aggressive parallel scanning.
+is serialised through Celery worker concurrency (not an in-process semaphore).
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
@@ -44,9 +42,6 @@ from app.services.scanner.target_validator import (
 from app.services.scanner.tls_inspector import inspect_tls
 
 logger = logging.getLogger("firmlock.scanner")
-
-# Bounded concurrency: never run aggressive parallel scans.
-_scan_slots = threading.BoundedSemaphore(DEFAULT_CONFIG.max_concurrent_scans)
 
 
 def _utcnow() -> datetime:
@@ -187,22 +182,21 @@ def run_scan(
 ) -> None:
     """Execute a scan end-to-end.
 
-    The parameters exist primarily for testing; the FastAPI background task
+    The parameters exist primarily for testing; the Celery task
     calls this with defaults.
     """
     factory = session_factory or SessionLocal
     db = factory()
-    acquired = False
     try:
         scan = db.get(Scan, scan_id)
         if scan is None:
             logger.error("Scan %s not found; nothing to run.", scan_id)
             return
 
-        if not _scan_slots.acquire(timeout=config.scan_acquire_timeout):
-            _mark_failed(db, scan, "Timed out waiting for a scan concurrency slot.")
+        # Idempotency check - don't re-run completed or failed scans
+        if scan.status in ("completed", "failed"):
+            logger.info("Scan %s already in terminal state (%s), skipping", scan_id, scan.status)
             return
-        acquired = True
 
         scan.status = "running"
         scan.started_at = _utcnow()
@@ -332,6 +326,4 @@ def run_scan(
             logger.exception("Could not mark scan %s as failed.", scan_id)
             db.rollback()
     finally:
-        if acquired:
-            _scan_slots.release()
         db.close()

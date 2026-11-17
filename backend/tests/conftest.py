@@ -1,4 +1,4 @@
-"""Shared test configuration and fixtures for FirmLock backend tests."""
+﻿"""Shared test configuration and fixtures for FirmLock backend tests."""
 
 from __future__ import annotations
 
@@ -6,6 +6,10 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Generator
+from unittest import mock
+
+# Tests run in inline mode by default to avoid requiring Redis/Celery/worker.
+os.environ.setdefault("FIRMLOCK_SCAN_EXECUTION_MODE", "inline")
 
 import pytest
 from alembic import command
@@ -15,50 +19,77 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.config import settings
 from app.core.login_protection import get_login_protection
 from app.core.rate_limit import get_rate_limiter
 from app.database import connection
-from app.database.connection import Base, get_db
+from app.database.connection import get_db
 from app.main import app
 from app.services.scanner import scan_manager
 
 
-def _run_alembic_upgrade(db_url: str) -> None:
-    """Run Alembic migrations to bring a test database up to date.
+@pytest.fixture(autouse=True)
+def mock_celery():
+    """Mock Celery task enqueueing without executing scans when applicable."""
+    if settings.scan_execution_mode != "celery":
+        yield
+        return
 
-    Creates a temporary alembic.ini configuration pointing to the test database
-    and runs 'upgrade head'.
-    """
-    # Create a temporary alembic config
+    try:
+        from app.tasks import scan_tasks
+    except Exception:
+        yield
+        return
+
+    class MockTaskResult:
+        def __init__(self, task_id="test-task-id"):
+            self.id = task_id
+
+    def execute_sync(scan_id):
+        return MockTaskResult()
+
+    patches = []
+    if hasattr(scan_tasks, "execute_scan"):
+        patches.append(mock.patch.object(scan_tasks.execute_scan, "delay", side_effect=execute_sync))
+        patches.append(
+            mock.patch.object(
+                scan_tasks.execute_scan,
+                "apply_async",
+                side_effect=lambda args, **kwargs: execute_sync(*args),
+            )
+        )
+
+    if not patches:
+        yield
+        return
+
+    with patches[0]:
+        if len(patches) > 1:
+            with patches[1]:
+                yield
+        else:
+            yield
+
+
+def _run_alembic_upgrade(db_url: str) -> None:
     alembic_cfg = AlembicConfig("alembic.ini")
     alembic_cfg.set_main_option("sqlalchemy.url", db_url)
-
-    # Run upgrade head
     command.upgrade(alembic_cfg, "head")
 
 
 @pytest.fixture(scope="function", autouse=True)
 def reset_security_state() -> Generator[None, None, None]:
-    """Reset rate limiter and login protection state before each test."""
     rate_limiter = get_rate_limiter()
     login_protection = get_login_protection()
-
-    # Clear all rate limit windows
     rate_limiter._windows.clear()
-
-    # Clear all login attempt tracking
     login_protection._attempts.clear()
-
     yield
-
-    # Clean up after test
     rate_limiter._windows.clear()
     login_protection._attempts.clear()
 
 
 @pytest.fixture(scope="function")
 def test_db() -> Generator[tuple[Engine, sessionmaker], None, None]:
-    """Create a temporary SQLite database for testing with Alembic migrations."""
     tmpdir = tempfile.TemporaryDirectory()
     db_fd, db_path = tempfile.mkstemp(suffix=".db", dir=tmpdir.name)
     os.close(db_fd)
@@ -75,33 +106,39 @@ def test_db() -> Generator[tuple[Engine, sessionmaker], None, None]:
             cursor.close()
 
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
-
-    # Run Alembic migrations to create schema (instead of Base.metadata.create_all)
     _run_alembic_upgrade(db_url)
 
-    # Override the module-level SessionLocal and engine for background tasks
     original_session_local = connection.SessionLocal
     original_engine = connection.engine
     connection.SessionLocal = TestingSessionLocal
     connection.engine = engine
 
-    # Also override scan_manager's SessionLocal
     original_scan_session_local = scan_manager.SessionLocal
     scan_manager.SessionLocal = TestingSessionLocal
 
+    original_tasks_session_local = None
+    scan_tasks_module = None
+    if settings.scan_execution_mode == "celery":
+        try:
+            from app.tasks import scan_tasks as scan_tasks_module
+            original_tasks_session_local = getattr(scan_tasks_module, "SessionLocal", None)
+            scan_tasks_module.SessionLocal = TestingSessionLocal
+        except Exception:
+            scan_tasks_module = None
+
     yield engine, TestingSessionLocal
 
-    # Restore original
     connection.SessionLocal = original_session_local
     connection.engine = original_engine
     scan_manager.SessionLocal = original_scan_session_local
+    if scan_tasks_module is not None and original_tasks_session_local is not None:
+        scan_tasks_module.SessionLocal = original_tasks_session_local
     engine.dispose()
     tmpdir.cleanup()
 
 
 @pytest.fixture(scope="function")
 def db_session(test_db) -> Generator[Session, None, None]:
-    """Provide a database session for direct database access in tests."""
     _, TestingSessionLocal = test_db
     session = TestingSessionLocal()
     try:
@@ -112,7 +149,6 @@ def db_session(test_db) -> Generator[Session, None, None]:
 
 @pytest.fixture(scope="function")
 def client(test_db, db_session) -> Generator[TestClient, None, None]:
-    """Create a TestClient with database dependency override."""
     engine, TestingSessionLocal = test_db
 
     def override_get_db() -> Generator[Session, None, None]:
@@ -123,8 +159,6 @@ def client(test_db, db_session) -> Generator[TestClient, None, None]:
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
-
     with TestClient(app) as test_client:
         yield test_client
-
     app.dependency_overrides.clear()

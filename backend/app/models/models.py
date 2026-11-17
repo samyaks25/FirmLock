@@ -168,6 +168,14 @@ class Scan(Base):
         DateTime(timezone=True), nullable=False, default=utcnow
     )
 
+    # Celery task tracking fields
+    celery_task_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    queue_timestamp: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
     asset: Mapped["Asset"] = relationship("Asset", back_populates="scans")
     findings: Mapped[List["Finding"]] = relationship(
         "Finding", back_populates="scan", passive_deletes=True

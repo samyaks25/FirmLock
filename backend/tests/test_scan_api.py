@@ -1,26 +1,17 @@
-"""API tests for the scanner endpoints.
+﻿"""API tests for the scanner endpoints.
 
-Covers:
-    * ``POST /api/assets/{asset_id}/scan`` - authorization/active/monitoring
-      guards (403), missing asset (404) and a successful queued scan (202).
-    * ``GET /api/scans/{scan_id}`` - completed scan with persisted findings,
-      failed scan, and 404 for unknown scans.
-    * ``GET /api/assets/{asset_id}/scans`` - history listing and 404.
-
-The scanner's network access is avoided by patching
-``scan_manager.resolve_and_validate`` to raise a controlled error, so no real
-DNS or HTTP requests are made. The background task still executes end-to-end
-against an isolated temporary SQLite database.
+Network access is avoided by patching ``scan_manager.resolve_and_validate``.
+In celery mode the enqueue is mocked and scans are executed directly. In inline
+mode scans execute via FastAPI BackgroundTasks with a fresh DB session.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest import mock
 
 from fastapi.testclient import TestClient
-from starlette.background import BackgroundTasks
 
+from app.core.config import settings
 from app.services.scanner.target_validator import (
     TargetDNSResolutionError,
     UnsafeTargetError,
@@ -29,10 +20,7 @@ from app.services.scanner.target_validator import (
 from tests.test_auth_helpers import get_auth_headers, login_user, register_user
 
 
-# Helper functions
-
 def _register_and_login(client: TestClient) -> dict:
-    """Register and login a test user, return headers with token."""
     register_user(client, "test@example.com", "password1234")
     token_data = login_user(client, "test@example.com", "password1234")
     return get_auth_headers(token_data["access_token"])
@@ -57,24 +45,24 @@ def _create_business(client: TestClient, headers: dict, name: str = "Acme") -> d
 def _create_asset(client: TestClient, headers: dict, domain: str = "example.com") -> dict:
     biz = _create_business(client, headers)
     return _auth_post(
-        client, headers,
+        client,
+        headers,
         f"/api/businesses/{biz['id']}/assets",
         json={"domain": domain, "authorization_confirmed": True},
     ).json()
 
 
 def _patch_resolve(exc):
-    """Patch the scan manager's resolve_and_validate to raise ``exc``."""
     import app.services.scanner.scan_manager as scan_manager
 
     return mock.patch.object(scan_manager, "resolve_and_validate", side_effect=exc)
 
 
-def _patch_background_tasks():
-    """Patch BackgroundTasks.add_task to run functions synchronously."""
-    def mock_add_task(self, func, *args, **kwargs):
-        func(*args, **kwargs)
-    return mock.patch.object(BackgroundTasks, "add_task", mock_add_task)
+def _run_scan_direct(scan_id: int) -> None:
+    from app.database.connection import SessionLocal
+    from app.services.scanner.scan_manager import run_scan
+
+    run_scan(scan_id, session_factory=SessionLocal)
 
 
 def _update_asset(db_session, asset_id: int, **fields) -> None:
@@ -123,7 +111,8 @@ def test_scan_monitoring_disabled_returns_403(client: TestClient) -> None:
 def test_start_scan_returns_202_with_pending_status(client: TestClient) -> None:
     headers = _register_and_login(client)
     asset = _create_asset(client, headers)
-    with _patch_resolve(UnsafeTargetError("blocked")), _patch_background_tasks():
+    exc = UnsafeTargetError("blocked")
+    with _patch_resolve(exc):
         resp = _auth_post(client, headers, f"/api/assets/{asset['id']}/scan")
     assert resp.status_code == 202
     data = resp.json()
@@ -135,9 +124,14 @@ def test_start_scan_returns_202_with_pending_status(client: TestClient) -> None:
 def test_completed_scan_persists_findings(client: TestClient) -> None:
     headers = _register_and_login(client)
     asset = _create_asset(client, headers)
-    with _patch_resolve(UnsafeTargetError("resolves to 10.0.0.1")), _patch_background_tasks():
+    exc = UnsafeTargetError("resolves to 10.0.0.1")
+    with _patch_resolve(exc):
         start = _auth_post(client, headers, f"/api/assets/{asset['id']}/scan")
     scan_id = start.json()["scan_id"]
+
+    if settings.scan_execution_mode == "celery":
+        with _patch_resolve(exc):
+            _run_scan_direct(scan_id)
 
     resp = _auth_get(client, headers, f"/api/scans/{scan_id}")
     assert resp.status_code == 200
@@ -147,7 +141,6 @@ def test_completed_scan_persists_findings(client: TestClient) -> None:
     assert body["completed_at"] is not None
     assert len(body["findings"]) >= 1
     assert "TARGET_SSRF_REJECTED" in {f["check_code"] for f in body["findings"]}
-    # Asset last_scanned_at updated.
     asset_resp = _auth_get(client, headers, f"/api/assets/{asset['id']}")
     assert asset_resp.json()["last_scanned_at"] is not None
 
@@ -155,9 +148,14 @@ def test_completed_scan_persists_findings(client: TestClient) -> None:
 def test_failed_scan_marked_failed(client: TestClient) -> None:
     headers = _register_and_login(client)
     asset = _create_asset(client, headers)
-    with _patch_resolve(TargetDNSResolutionError("no such host")), _patch_background_tasks():
+    exc = TargetDNSResolutionError("no such host")
+    with _patch_resolve(exc):
         start = _auth_post(client, headers, f"/api/assets/{asset['id']}/scan")
     scan_id = start.json()["scan_id"]
+
+    if settings.scan_execution_mode == "celery":
+        with _patch_resolve(exc):
+            _run_scan_direct(scan_id)
 
     resp = _auth_get(client, headers, f"/api/scans/{scan_id}")
     assert resp.status_code == 200
@@ -177,7 +175,7 @@ def test_get_unknown_scan_returns_404(client: TestClient) -> None:
 def test_list_scans_for_asset(client: TestClient) -> None:
     headers = _register_and_login(client)
     asset = _create_asset(client, headers)
-    with _patch_resolve(UnsafeTargetError("blocked")), _patch_background_tasks():
+    with _patch_resolve(UnsafeTargetError("blocked")):
         _auth_post(client, headers, f"/api/assets/{asset['id']}/scan")
 
     resp = _auth_get(client, headers, f"/api/assets/{asset['id']}/scans")
@@ -191,3 +189,12 @@ def test_list_scans_missing_asset_returns_404(client: TestClient) -> None:
     headers = _register_and_login(client)
     resp = _auth_get(client, headers, "/api/assets/999999/scans")
     assert resp.status_code == 404
+
+
+def test_worker_health_endpoint_exposes_mode(client: TestClient) -> None:
+    headers = _register_and_login(client)
+    resp = _auth_get(client, headers, "/api/health/workers")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "mode" in body
+    assert "redis" in body and "workers" in body

@@ -115,5 +115,47 @@ class Settings:
             os.getenv("FIRMLOCK_RISK_MIN_COVERAGE_PERCENT", "80")
         )
 
+        # --- Scan execution mode ----------------------------------------
+        # 'inline' uses FastAPI BackgroundTasks with a fresh DB session (no
+        # Redis/Celery/worker required). 'celery' preserves the existing
+        # Redis-backed Celery worker execution path.
+        scan_mode = os.getenv("FIRMLOCK_SCAN_EXECUTION_MODE", "inline").strip().lower()
+        if scan_mode not in {"inline", "celery"}:
+            raise ValueError(
+                "FIRMLOCK_SCAN_EXECUTION_MODE must be 'inline' or 'celery' "
+                f"(got {scan_mode!r})."
+            )
+        self.scan_execution_mode: str = scan_mode
+
+        # --- Celery / Redis configuration -------------------------------
+        # Redis URL for the Celery message broker and result backend.
+        # Required for celery scan execution mode; ignored in inline mode.
+        self.redis_url: str = os.getenv("FIRMLOCK_REDIS_URL", "").strip()
+
+        # Celery worker concurrency (number of concurrent scan tasks)
+        self.celery_worker_concurrency: int = int(
+            os.getenv("FIRMLOCK_CELERY_WORKER_CONCURRENCY", "2")
+        )
+
+        # Celery task time limit (seconds) - hard limit after which worker kills task
+        self.celery_task_time_limit: int = int(
+            os.getenv("FIRMLOCK_CELERY_TASK_TIME_LIMIT", "300")
+        )
+
+        # Celery task soft time limit (seconds) - soft limit for graceful handling
+        self.celery_task_soft_time_limit: int = int(
+            os.getenv("FIRMLOCK_CELERY_TASK_SOFT_TIME_LIMIT", "240")
+        )
+
+        # Maximum retry attempts for transient failures
+        self.celery_max_retries: int = int(
+            os.getenv("FIRMLOCK_CELERY_MAX_RETRIES", "3")
+        )
+
+        # Base retry delay in seconds (exponential backoff)
+        self.celery_retry_base_delay: int = int(
+            os.getenv("FIRMLOCK_CELERY_RETRY_BASE_DELAY", "60")
+        )
+
 
 settings = Settings()
