@@ -1,5 +1,5 @@
-"""Database package.
+"""Database package exports."""
 
-Placeholder for the upcoming SQLAlchemy / SQLite implementation.
-No database models or sessions are defined yet.
-"""
+from app.database.connection import Base, SessionLocal, engine, get_db, init_db
+
+__all__ = ["Base", "SessionLocal", "engine", "get_db", "init_db"]

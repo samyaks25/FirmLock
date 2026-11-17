@@ -5,13 +5,16 @@ Run locally with:
 """
 
 import logging
+from contextlib import asynccontextmanager
 from typing import Any, Dict
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.router import api_router
 from app.core.config import settings
+from app.database.connection import init_db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,12 +23,20 @@ logging.basicConfig(
 logger = logging.getLogger("firmlock")
 
 
+@asynccontextmanager
+async def lifespan(_application: FastAPI):
+    """Application lifespan hook for startup/shutdown tasks."""
+    init_db()
+    yield
+
+
 def create_app() -> FastAPI:
     """Build and configure the FastAPI application."""
     application = FastAPI(
         title=settings.app_name,
         version=settings.api_version,
         description="Backend API for FirmLock cybersecurity monitoring.",
+        lifespan=lifespan,
     )
 
     # Explicitly allowed origins only. Credentials are allowed for these
@@ -34,7 +45,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -68,6 +79,7 @@ def create_app() -> FastAPI:
             "environment": settings.environment,
         }
 
+    application.include_router(api_router)
     return application
 
 

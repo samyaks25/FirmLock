@@ -6,6 +6,7 @@ live in this module. No secrets or credentials are stored in source code.
 """
 
 import os
+from pathlib import Path
 from typing import List
 
 
@@ -30,6 +31,18 @@ class Settings:
         default_origins = "http://localhost:5173,http://127.0.0.1:5173"
         self.cors_origins: List[str] = _parse_origins(
             os.getenv("FIRMLOCK_CORS_ORIGINS", default_origins)
+        )
+
+        backend_dir = Path(__file__).resolve().parents[2]
+        self.data_dir: Path = Path(
+            os.getenv("FIRMLOCK_DATA_DIR", str(backend_dir / "data"))
+        )
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        default_db_path = self.data_dir / "firmlock.db"
+        # The URL is configurable via env var; no credentials are embedded.
+        self.database_url: str = os.getenv(
+            "FIRMLOCK_DATABASE_URL", f"sqlite:///{default_db_path.as_posix()}"
         )
 
 
