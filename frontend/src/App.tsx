@@ -9,7 +9,7 @@ import { Reports } from './pages/Reports';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 import { Onboarding } from './pages/Onboarding';
-import { AuthProvider, useAuth } from './auth/AuthContext';
+import { useAuth } from './auth/AuthContext';
 
 function AppShell() {
   const { user, token, business, businessId, loading, logout } = useAuth();
@@ -76,15 +76,11 @@ export default function App() {
 
   if (!token) {
     return (
-      <AuthProvider>
-        {window.location.pathname === '/register' ? <Register /> : <Login />}
-      </AuthProvider>
+      window.location.pathname === '/register' ? <Register /> : <Login />
     );
   }
 
   return (
-    <AuthProvider>
-      <AppShell />
-    </AuthProvider>
+    <AppShell />
   );
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Lock, Mail, AlertCircle } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api } from '../api/client';
+import { api, setToken } from '../api/client';
 import type { UserLogin } from '../types/backend';
 
 export function Login() {
@@ -17,9 +17,10 @@ export function Login() {
     setSubmitting(true);
     try {
       const payload: UserLogin = { email, password };
-      const token = await api.post<{ access_token: string; expires_in: number }>('/api/auth/login', payload);
-      const user = await api.get<{ id: number; email: string; full_name: string | null; is_active: boolean; created_at: string; updated_at: string }>('/api/auth/me');
-      login(token.access_token, user);
+       const token = await api.post<{ access_token: string; expires_in: number }>('/api/auth/login', payload);
+       setToken(token.access_token);
+       const user = await api.get<{ id: number; email: string; full_name: string | null; is_active: boolean; created_at: string; updated_at: string }>('/api/auth/me');
+       login(token.access_token, user);
       try {
         await loadBusinesses();
       } catch {

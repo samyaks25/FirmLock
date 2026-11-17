@@ -1,4 +1,4 @@
-import { X } from 'lucide-react';
+﻿import { X } from 'lucide-react';
 import type { Scan } from './ScanHistoryTable';
 import type { Finding } from './FindingCard';
 import { SeverityBadge } from './SeverityBadge';
@@ -12,6 +12,11 @@ interface Props {
 }
 
 export function ScanDetails({ scan, findings, risk, onClose }: Props) {
+  const showUnavailableScore = scan.score === null;
+  const unavailableText = risk?.score_available === false
+    ? (risk.unavailable_reason ?? 'Score unavailable because assessment coverage is below the required 80%.')
+    : 'Score unavailable because assessment coverage is below the required 80%.';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="bg-white rounded-xl w-full max-w-3xl shadow-xl max-h-[90vh] overflow-y-auto">
@@ -29,7 +34,12 @@ export function ScanDetails({ scan, findings, risk, onClose }: Props) {
             <p><span className="font-medium text-[#101B2C]">Date:</span> {scan.date}</p>
             <p><span className="font-medium text-[#101B2C]">Status:</span> {scan.status}</p>
             <p><span className="font-medium text-[#101B2C]">Security Score:</span> {scan.score === null ? 'Not available' : `${scan.score}/100`}</p>
+            <p><span className="font-medium text-[#101B2C]">Coverage:</span> {risk ? `${risk.coverage.percentage}%` : '—'}</p>
           </div>
+
+          {showUnavailableScore && (
+            <p className="text-sm text-[#718096]">{unavailableText}</p>
+          )}
 
           {risk && (
             <div className="bg-[#F4F7FA] rounded-lg p-4 border border-[#E2E8F0]">
@@ -49,9 +59,6 @@ export function ScanDetails({ scan, findings, risk, onClose }: Props) {
                     ))}
                   </ul>
                 </div>
-              )}
-              {risk.score_available === false && risk.unavailable_reason && (
-                <p className="mt-3 text-xs text-[#718096]">{risk.unavailable_reason}</p>
               )}
             </div>
           )}

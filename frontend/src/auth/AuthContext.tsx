@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api, clearToken, getStoredBusinessId, getStoredUser, getToken, setStoredBusinessId, setToken } from '../api/client';
+import { api, clearToken, getStoredBusinessId, getStoredUser, getToken, setStoredBusinessId, setStoredUser, setToken } from '../api/client';
 import type { BusinessCreate, BusinessResponse, UserResponse } from '../types/backend';
 
 interface AuthContextType {
@@ -67,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = (accessToken: string, userData: UserResponse) => {
     setToken(accessToken);
     setTokenState(accessToken);
+    setStoredUser(userData);
     setUser(userData);
   };
 
