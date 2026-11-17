@@ -1,15 +1,17 @@
-import { Search } from 'lucide-react';
+import { Search, Download } from 'lucide-react';
 
 export type ReportStatus = 'Completed' | 'Generating' | 'Failed';
 
 export interface Report {
   id: string;
+  scanId: number;
+  assetId: number;
   name: string;
   website: string;
   domain: string;
   date: string;
   status: ReportStatus;
-  score: number;
+  score: number | null;
   findings: number;
 }
 
@@ -20,6 +22,7 @@ interface Props {
   dateFilter: string;
   statusFilter: string;
   onView: (r: Report) => void;
+  onDownloadCsv: (scanId: number) => void;
 }
 
 const statusOptions = ['All', 'Completed', 'Generating', 'Failed'] as const;
@@ -98,6 +101,7 @@ export function ReportTable({
   dateFilter,
   statusFilter,
   onView,
+  onDownloadCsv,
 }: Props) {
   const filtered = reports.filter((r) => {
     const matchesSearch =
@@ -151,7 +155,6 @@ export function ReportTable({
           <tbody className="divide-y divide-[#E2E8F0]/50">
             {filtered.map((r) => {
               const statusConfig = getStatusConfig(r.status);
-              const scoreColor = getScoreColor(r.score);
               return (
                 <tr key={r.id} className="hover:bg-[#F4F7FA]/50 transition-colors">
                   <td className="px-6 py-4">
@@ -164,7 +167,11 @@ export function ReportTable({
                   <td className="px-6 py-4 text-sm text-[#718096]">{r.id}</td>
                   <td className="px-6 py-4 hidden md:table-cell text-sm text-[#718096]">{r.date}</td>
                   <td className="px-6 py-4">
-                    <span className={`font-medium ${scoreColor}`}>{r.score}/100</span>
+                    {r.score === null ? (
+                      <span className="text-sm text-[#718096]">—</span>
+                    ) : (
+                      <span className={`font-medium ${getScoreColor(r.score)}`}>{r.score}/100</span>
+                    )}
                   </td>
                   <td className="px-6 py-4 hidden lg:table-cell text-sm text-[#718096]">{r.findings}</td>
                   <td className="px-6 py-4">
@@ -173,12 +180,25 @@ export function ReportTable({
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <button
-                      onClick={() => onView(r)}
-                      className="px-3 py-1.5 text-xs rounded-lg bg-[#36D6C4]/10 text-[#36D6C4] hover:bg-[#36D6C4]/20"
-                    >
-                      View Report
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button
+                        onClick={() => onView(r)}
+                        className="px-3 py-1.5 text-xs rounded-lg bg-[#36D6C4]/10 text-[#36D6C4] hover:bg-[#36D6C4]/20"
+                      >
+                        View Report
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDownloadCsv(r.scanId);
+                        }}
+                        className="p-1.5 rounded-lg hover:bg-[#E2E8F0] text-[#718096] transition-colors"
+                        aria-label="Download CSV"
+                        title="Download CSV"
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );

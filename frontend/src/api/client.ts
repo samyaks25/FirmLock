@@ -1,4 +1,13 @@
-import type { UserResponse, ScanResponse } from '../types/backend';
+import type {
+  AlertListResponse,
+  AlertResponse,
+  AlertSummary,
+  AlertUpdate,
+  AssetReportsResponse,
+  ScanReportResponse,
+  UserResponse,
+  ScanResponse,
+} from '../types/backend';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000').replace(/\/$/, '');
 const TOKEN_KEY = 'firmlock_auth_token';
@@ -139,4 +148,35 @@ export const api = {
       };
       loop();
     }),
+};
+
+export interface AlertListParams {
+  severity?: string;
+  status?: string;
+  page?: number;
+  page_size?: number;
+}
+
+export const alertsApi = {
+  list: (businessId: number, params: AlertListParams = {}) => {
+    const searchParams = new URLSearchParams();
+    if (params.severity) searchParams.set('severity', params.severity);
+    if (params.status) searchParams.set('status', params.status);
+    if (params.page) searchParams.set('page', String(params.page));
+    if (params.page_size) searchParams.set('page_size', String(params.page_size));
+    const qs = searchParams.toString();
+    return api.get<AlertListResponse>(`/api/businesses/${businessId}/alerts${qs ? `?${qs}` : ''}`);
+  },
+  summary: (businessId: number) =>
+    api.get<AlertSummary>(`/api/businesses/${businessId}/alerts/summary`),
+  get: (alertId: number) => api.get<AlertResponse>(`/api/alerts/${alertId}`),
+  update: (alertId: number, body: AlertUpdate) =>
+    api.patch<AlertResponse>(`/api/alerts/${alertId}`, body),
+};
+
+export const reportsApi = {
+  assetReports: (assetId: number) =>
+    api.get<AssetReportsResponse>(`/api/assets/${assetId}/reports`),
+  scanReport: (scanId: number) => api.get<ScanReportResponse>(`/api/scans/${scanId}`),
+  scanReportCsv: (scanId: number) => api.get<string>(`/api/scans/${scanId}/report.csv`),
 };

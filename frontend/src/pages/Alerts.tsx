@@ -1,181 +1,126 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Bell, AlertTriangle, ShieldCheck, XCircle } from 'lucide-react';
+import { api, alertsApi } from '../api/client';
+import { useAuth } from '../auth/AuthContext';
 import { AlertSummaryCard } from '../components/alerts/AlertSummaryCard';
 import { AlertList, AlertFilterBar, type Alert } from '../components/alerts/AlertList';
 import { AlertDetails } from '../components/alerts/AlertDetails';
+import type { AlertResponse, AlertSummary, AssetResponse } from '../types/backend';
 
-const initialAlerts: Alert[] = [
-  {
-    id: 'ALT-001',
-    title: 'SSL Certificate Expiring Soon',
-    website: 'API Gateway',
-    domain: 'api.company.com',
-    category: 'SSL Certificate Expiration',
-    severity: 'Critical',
-    date: '2026-11-16',
-    time: '09:30 AM',
-    read: false,
-    description:
-      'The SSL certificate for api.company.com is set to expire in 7 days (on 2026-11-23). This will cause browser warnings and potential service disruption for API consumers.',
-    impact:
-      'Users and API clients will see certificate warnings. Services relying on this certificate may fail to establish secure connections, leading to downtime and loss of trust.',
-    remediation:
-      'Renew the SSL certificate immediately through your certificate authority. Update the certificate on all load balancers and servers. Verify the new certificate chain is valid.',
-  },
-  {
-    id: 'ALT-002',
-    title: 'Missing Content-Security-Policy Header',
-    website: 'Primary Website',
-    domain: 'www.company.com',
-    category: 'Missing Security Headers',
-    severity: 'High',
-    date: '2026-11-15',
-    time: '02:15 PM',
-    read: false,
-    description:
-      'The website is missing the Content-Security-Policy (CSP) header, which helps prevent XSS attacks and data injection by controlling resource loading.',
-    impact:
-      'Without CSP, the site is more vulnerable to cross-site scripting (XSS) attacks, clickjacking, and other code injection attacks that could compromise user data.',
-    remediation:
-      'Implement a Content-Security-Policy header with appropriate directives for your application. Start with report-only mode to test, then enforce. Include directives for scripts, styles, images, and fonts.',
-  },
-  {
-    id: 'ALT-003',
-    title: 'SQL Injection Vulnerability Detected',
-    website: 'Customer Portal',
-    domain: 'portal.company.com',
-    category: 'Security Vulnerabilities',
-    severity: 'Critical',
-    date: '2026-11-15',
-    time: '11:45 AM',
-    read: true,
-    description:
-      'A potential SQL injection vulnerability was detected in the login form parameter handling. Input validation appears insufficient.',
-    impact:
-      'Attackers could potentially execute arbitrary SQL commands, leading to data theft, data manipulation, or complete database compromise.',
-    remediation:
-      'Implement parameterized queries/prepared statements for all database interactions. Add input validation and sanitization. Deploy a Web Application Firewall (WAF) rule to block injection attempts.',
-  },
-  {
-    id: 'ALT-004',
-    title: 'Domain Registration Expiring',
-    website: 'Documentation Site',
-    domain: 'docs.company.com',
-    category: 'Domain Expiration',
-    severity: 'Medium',
-    date: '2026-11-14',
-    time: '04:20 PM',
-    read: true,
-    description:
-      'The domain docs.company.com is set to expire in 30 days (on 2026-12-16). Failure to renew will result in loss of domain ownership.',
-    impact:
-      'If the domain expires, the documentation site will become inaccessible. There is also a risk of domain hijacking if a malicious actor registers it.',
-    remediation:
-      'Renew the domain registration immediately through your domain registrar. Enable auto-renewal to prevent future issues. Verify DNS records are correctly configured.',
-  },
-  {
-    id: 'ALT-005',
-    title: 'Insecure Cookie Configuration',
-    website: 'Customer Portal',
-    domain: 'portal.company.com',
-    category: 'Website Security Configuration',
-    severity: 'High',
-    date: '2026-11-14',
-    time: '10:10 AM',
-    read: false,
-    description:
-      'Session cookies are missing the Secure and HttpOnly flags, making them accessible to client-side scripts and transmittable over non-HTTPS connections.',
-    impact:
-      'Session cookies could be stolen via XSS attacks or intercepted over unencrypted connections, leading to account takeover.',
-    remediation:
-      'Set the Secure flag to ensure cookies are only sent over HTTPS. Set HttpOnly flag to prevent JavaScript access. Consider adding SameSite attribute for CSRF protection.',
-  },
-  {
-    id: 'ALT-006',
-    title: 'Outdated TLS Version Supported',
-    website: 'API Gateway',
-    domain: 'api.company.com',
-    category: 'Security Vulnerabilities',
-    severity: 'Medium',
-    date: '2026-11-13',
-    time: '03:30 PM',
-    read: true,
-    description:
-      'The server supports TLS 1.0 and TLS 1.1, which are deprecated and have known vulnerabilities. Modern clients should use TLS 1.2 or 1.3.',
-    impact:
-      'Connections using deprecated TLS versions are vulnerable to downgrade attacks and cryptographic weaknesses.',
-    remediation:
-      'Disable TLS 1.0 and TLS 1.1 on the server. Configure the server to only support TLS 1.2 and TLS 1.3. Test compatibility with all client applications.',
-  },
-  {
-    id: 'ALT-007',
-    title: 'Missing HSTS Header',
-    website: 'Primary Website',
-    domain: 'www.company.com',
-    category: 'Missing Security Headers',
-    severity: 'Low',
-    date: '2026-11-12',
-    time: '09:00 AM',
-    read: true,
-    description:
-      'The HTTP Strict Transport Security (HSTS) header is not present, which means browsers may allow HTTP connections to the site.',
-    impact:
-      'Without HSTS, users could be vulnerable to SSL stripping attacks where HTTPS connections are downgraded to HTTP.',
-    remediation:
-      'Add the Strict-Transport-Security header with an appropriate max-age. Start with a short duration and include subdomains. Consider preloading.',
-  },
-  {
-    id: 'ALT-008',
-    title: 'Weak Cipher Suite Enabled',
-    website: 'API Gateway',
-    domain: 'api.company.com',
-    category: 'Website Security Configuration',
-    severity: 'Medium',
-    date: '2026-11-11',
-    time: '01:45 PM',
-    read: true,
-    description:
-      'The server supports weak cipher suites including RC4 and 3DES, which have known cryptographic vulnerabilities.',
-    impact:
-      'Weak ciphers can be exploited to decrypt traffic or perform man-in-the-middle attacks on encrypted connections.',
-    remediation:
-      'Update the server SSL/TLS configuration to disable weak cipher suites. Enable only strong ciphers (AES-GCM, ChaCha20-Poly1305). Test with SSL Labs.',
-  },
-];
+function normalizeSeverity(severity: string): Alert['severity'] {
+  const cap = severity.charAt(0).toUpperCase() + severity.slice(1).toLowerCase();
+  return ['Critical', 'High', 'Medium', 'Low', 'Info'].includes(cap) ? (cap as Alert['severity']) : 'Info';
+}
+
+function mapAlert(alert: AlertResponse, domains: Map<number, string>): Alert {
+  const created = new Date(alert.created_at);
+  const domain = domains.get(alert.asset_id) ?? `Asset #${alert.asset_id}`;
+  const status: Alert['status'] = alert.status === 'resolved' ? 'resolved' : alert.status === 'read' ? 'read' : 'unread';
+  return {
+    id: String(alert.id),
+    backendId: alert.id,
+    title: alert.title,
+    website: domain,
+    domain,
+    category: '—',
+    severity: normalizeSeverity(alert.severity),
+    status,
+    read: status !== 'unread',
+    resolved: status === 'resolved',
+    date: created.toISOString().slice(0, 10),
+    time: created.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: true }),
+    description: alert.message,
+    impact: '—',
+    remediation: '—',
+  };
+}
 
 export function Alerts() {
-  const [alerts, setAlerts] = useState<Alert[]>(initialAlerts);
+  const { businessId } = useAuth();
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [summary, setSummary] = useState<AlertSummary | null>(null);
+  const [domains, setDomains] = useState<Map<number, string>>(new Map());
   const [search, setSearch] = useState('');
   const [severityFilter, setSeverityFilter] = useState('All');
-  const [readFilter, setReadFilter] = useState('All');
-  const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [selectedAlert, setSelectedAlert] = useState<AlertResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleMarkRead = (id: string) => {
-    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, read: true } : a)));
-  };
+  const loadData = useCallback(async () => {
+    if (!businessId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const [assetList, alertList, alertSummary] = await Promise.all([
+        api.get<AssetResponse[]>(`/api/businesses/${businessId}/assets`),
+        alertsApi.list(businessId, { page: 1, page_size: 100 }),
+        alertsApi.summary(businessId),
+      ]);
+      setDomains(new Map(assetList.map((a) => [a.id, a.domain])));
+      setAlerts(alertList.items.map((a) => mapAlert(a, new Map(assetList.map((x) => [x.id, x.domain])))));
+      setSummary(alertSummary);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load alerts.');
+    } finally {
+      setLoading(false);
+    }
+  }, [businessId]);
 
-  const handleMarkUnread = (id: string) => {
-    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, read: false } : a)));
-  };
+  useEffect(() => {
+    if (!businessId) return;
+    (async () => {
+      await loadData();
+    })();
+  }, [businessId, loadData]);
 
-  const handleDismiss = (id: string) => {
-    if (window.confirm('Dismiss this alert? This action cannot be undone.')) {
-      setAlerts((prev) => prev.filter((a) => a.id !== id));
+  const handleUpdate = async (backendId: number, updates: { read?: boolean; resolved?: boolean }) => {
+    setError(null);
+    try {
+      const updated = await alertsApi.update(backendId, updates);
+      setAlerts((prev) =>
+        prev.map((a) => (a.backendId === backendId ? mapAlert(updated, domains) : a)),
+      );
+      const alertSummary = await alertsApi.summary(businessId!);
+      setSummary(alertSummary);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update alert.');
     }
   };
 
-  const handleMarkAllRead = () => {
-    setAlerts((prev) => prev.map((a) => ({ ...a, read: true })));
+  const handleMarkRead = (backendId: number) => handleUpdate(backendId, { read: true });
+  const handleMarkUnread = (backendId: number) => handleUpdate(backendId, { read: false });
+  const handleResolve = (backendId: number) => handleUpdate(backendId, { resolved: true });
+
+  const handleView = async (backendId: number) => {
+    setDetailLoading(true);
+    setError(null);
+    try {
+      const alert = await alertsApi.get(backendId);
+      setSelectedAlert(alert);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load alert details.');
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
-  const handleView = (alert: Alert) => {
-    setSelectedAlert(alert);
-  };
+  const total = summary?.total ?? alerts.length;
+  const unread = summary?.unread ?? alerts.filter((a) => a.status === 'unread').length;
+  const critical = summary?.critical ?? alerts.filter((a) => a.severity === 'Critical').length;
+  const resolved = summary?.resolved ?? alerts.filter((a) => a.status === 'resolved').length;
 
-  const total = alerts.length;
-  const unread = alerts.filter((a) => !a.read).length;
-  const critical = alerts.filter((a) => a.severity === 'Critical').length;
-  const resolved = initialAlerts.length - alerts.length;
+  if (!businessId) {
+    return (
+      <div className="min-h-screen bg-[#F4F7FA] md:ml-64">
+        <div className="p-4 md:p-6 md:ml-20">
+          <h1 className="text-2xl font-semibold text-[#101B2C]">Alerts & Notifications</h1>
+          <p className="text-sm text-[#718096] mb-6">No business selected. Please select or create a business to view alerts.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F4F7FA]">
@@ -187,10 +132,6 @@ export function Alerts() {
               <p className="text-sm text-[#718096]">Monitor and manage security alerts across your assets.</p>
             </div>
           </div>
-
-          <p className="text-xs text-[#718096] mb-4">
-            All alerts shown are demonstration data. No actual security findings generated.
-          </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6 mb-6">
             <AlertSummaryCard
@@ -223,38 +164,44 @@ export function Alerts() {
             />
           </div>
 
-          <AlertFilterBar
-            search={search}
-            setSearch={setSearch}
-            severityFilter={severityFilter}
-            setSeverityFilter={setSeverityFilter}
-            readFilter={readFilter}
-            setReadFilter={setReadFilter}
-          />
+          {loading && <p className="text-[#718096] mb-4">Loading alerts...</p>}
+          {error && <p className="text-[#EF4444] mb-4">{error}</p>}
 
-          <AlertList
-            alerts={alerts}
-            search={search}
-            setSearch={setSearch}
-            severityFilter={severityFilter}
-            setSeverityFilter={setSeverityFilter}
-            readFilter={readFilter}
-            setReadFilter={setReadFilter}
-            onView={handleView}
-            onMarkRead={handleMarkRead}
-            onMarkUnread={handleMarkUnread}
-            onDismiss={handleDismiss}
-            onMarkAllRead={handleMarkAllRead}
-          />
+          {!loading && (
+            <>
+              <AlertFilterBar
+                search={search}
+                setSearch={setSearch}
+                severityFilter={severityFilter}
+                setSeverityFilter={setSeverityFilter}
+                statusFilter={statusFilter}
+                setStatusFilter={setStatusFilter}
+              />
+
+              <AlertList
+                alerts={alerts}
+                search={search}
+                setSearch={setSearch}
+                severityFilter={severityFilter}
+                setSeverityFilter={setSeverityFilter}
+                statusFilter={statusFilter}
+                setStatusFilter={setStatusFilter}
+                onView={handleView}
+                onMarkRead={handleMarkRead}
+                onMarkUnread={handleMarkUnread}
+                onResolve={handleResolve}
+              />
+            </>
+          )}
 
           <p className="text-center text-sm text-[#718096] mt-8 pb-8">
-            All data shown is demonstration/mock data for preview purposes.
+            Alerts are fetched from the FirmLock API for your selected business.
           </p>
         </div>
       </div>
 
       {selectedAlert && (
-        <AlertDetails alert={selectedAlert} onClose={() => setSelectedAlert(null)} />
+        <AlertDetails alert={selectedAlert} onClose={() => setSelectedAlert(null)} loading={detailLoading} />
       )}
     </div>
   );

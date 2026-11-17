@@ -1,46 +1,73 @@
-import { X, AlertTriangle, Globe, Shield, Info, FileText } from 'lucide-react';
+import { X, AlertTriangle, Globe, Info, FileText, ShieldCheck } from 'lucide-react';
+import type { AlertResponse } from '../../types/backend';
+import type { AlertSeverity } from './AlertSeverityBadge';
 import { AlertSeverityBadge } from './AlertSeverityBadge';
-import type { Alert, AlertCategory } from './AlertList';
 
 interface AlertDetailsProps {
-  alert: Alert | null;
+  alert: AlertResponse | null;
   onClose: () => void;
+  loading?: boolean;
 }
 
-const categoryIcons: Record<AlertCategory, typeof Globe> = {
-  'SSL Certificate Expiration': Shield,
-  'Missing Security Headers': Info,
-  'Security Vulnerabilities': AlertTriangle,
-  'Domain Expiration': Globe,
-  'Website Security Configuration': FileText,
+const categoryIcons: Record<string, React.ComponentType<{ className?: string }>> = {
+  Critical: AlertTriangle,
+  High: AlertTriangle,
+  Medium: Info,
+  Low: ShieldCheck,
+  Info: Info,
 };
 
-const getCategoryConfig = (category: AlertCategory) => {
-  switch (category) {
-    case 'SSL Certificate Expiration':
-      return { color: 'bg-[#F2B84B]/10 text-[#F2B84B]', label: 'SSL Certificate' };
-    case 'Missing Security Headers':
-      return { color: 'bg-[#36D6C4]/10 text-[#36D6C4]', label: 'Security Headers' };
-    case 'Security Vulnerabilities':
-      return { color: 'bg-[#EF4444]/10 text-[#EF4444]', label: 'Vulnerabilities' };
-    case 'Domain Expiration':
-      return { color: 'bg-[#718096]/10 text-[#718096]', label: 'Domain' };
-    case 'Website Security Configuration':
-      return { color: 'bg-[#36D6C4]/10 text-[#36D6C4]', label: 'Configuration' };
+const getCategoryConfig = (severity: string) => {
+  switch (severity.toLowerCase()) {
+    case 'critical':
+      return { color: 'bg-[#EF4444]/10 text-[#EF4444]', label: 'Critical' };
+    case 'high':
+      return { color: 'bg-[#F2B84B]/10 text-[#F2B84B]', label: 'High' };
+    case 'medium':
+      return { color: 'bg-[#36D6C4]/10 text-[#36D6C4]', label: 'Medium' };
+    case 'low':
+      return { color: 'bg-[#718096]/10 text-[#718096]', label: 'Low' };
+    default:
+      return { color: 'bg-[#718096]/10 text-[#718096]', label: 'Info' };
   }
 };
 
-export function AlertDetails({ alert, onClose }: AlertDetailsProps) {
+export function AlertDetails({ alert, onClose, loading }: AlertDetailsProps) {
+  if (loading) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 animate-in fade-in-0">
+        <div className="bg-white rounded-xl w-full max-w-2xl shadow-xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95">
+          <div className="flex items-center justify-between p-5 border-b border-[#E2E8F0]">
+            <h2 className="text-lg font-semibold text-[#101B2C]">Alert Details</h2>
+            <button onClick={onClose} aria-label="Close" className="p-2 rounded-lg hover:bg-[#F4F7FA]">
+              <X className="w-5 h-5 text-[#718096]" />
+            </button>
+          </div>
+          <div className="p-5 text-center text-[#718096]">Loading alert details...</div>
+        </div>
+      </div>
+    );
+  }
+
   if (!alert) return null;
 
-  const categoryConfig = getCategoryConfig(alert.category);
-  const CategoryIcon = categoryIcons[alert.category];
+  const created = new Date(alert.created_at);
+  const severity = alert.severity.charAt(0).toUpperCase() + alert.severity.slice(1).toLowerCase();
+  const categoryConfig = getCategoryConfig(alert.severity);
+  const CategoryIcon = (categoryIcons[severity] ?? Globe) as typeof Globe;
+
+  const statusLabel =
+    alert.status === 'resolved'
+      ? 'Resolved'
+      : alert.status === 'read'
+        ? 'Read'
+        : 'Unread';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 animate-in fade-in-0">
       <div className="bg-white rounded-xl w-full max-w-2xl shadow-xl max-h-[90vh] overflow-y-auto animate-in zoom-in-95">
         <div className="flex items-center justify-between p-5 border-b border-[#E2E8F0]">
-          <h2 className="text-lg font-semibold text-[#101B2C]">Alert Details (demo)</h2>
+          <h2 className="text-lg font-semibold text-[#101B2C]">Alert Details</h2>
           <button onClick={onClose} aria-label="Close" className="p-2 rounded-lg hover:bg-[#F4F7FA]">
             <X className="w-5 h-5 text-[#718096]" />
           </button>
@@ -49,33 +76,32 @@ export function AlertDetails({ alert, onClose }: AlertDetailsProps) {
           <div className="flex items-start gap-4 p-4 bg-[#F4F7FA] rounded-xl">
             <div
               className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                alert.severity === 'Critical'
+                alert.severity.toLowerCase() === 'critical'
                   ? 'bg-[#EF4444]/10'
-                  : alert.severity === 'High'
-                  ? 'bg-[#F2B84B]/10'
-                  : alert.severity === 'Medium'
-                  ? 'bg-[#36D6C4]/10'
-                  : 'bg-[#718096]/10'
+                  : alert.severity.toLowerCase() === 'high'
+                    ? 'bg-[#F2B84B]/10'
+                    : alert.severity.toLowerCase() === 'medium'
+                      ? 'bg-[#36D6C4]/10'
+                      : 'bg-[#718096]/10'
               }`}
             >
               <CategoryIcon
                 className={`w-6 h-6 ${
-                  alert.severity === 'Critical'
+                  alert.severity.toLowerCase() === 'critical'
                     ? 'text-[#EF4444]'
-                    : alert.severity === 'High'
-                    ? 'text-[#F2B84B]'
-                    : alert.severity === 'Medium'
-                    ? 'text-[#36D6C4]'
-                    : 'text-[#718096]'
+                    : alert.severity.toLowerCase() === 'high'
+                      ? 'text-[#F2B84B]'
+                      : alert.severity.toLowerCase() === 'medium'
+                        ? 'text-[#36D6C4]'
+                        : 'text-[#718096]'
                 }`}
                 aria-hidden="true"
               />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap mb-2">
-                <AlertSeverityBadge severity={alert.severity} />
+                <AlertSeverityBadge severity={severity as AlertSeverity} />
                 <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${categoryConfig.color}`}>
-                  <CategoryIcon className="w-3 h-3" aria-hidden="true" />
                   {categoryConfig.label}
                 </span>
               </div>
@@ -85,35 +111,49 @@ export function AlertDetails({ alert, onClose }: AlertDetailsProps) {
 
           <div className="grid grid-cols-2 gap-3 text-sm border border-[#E2E8F0] rounded-xl p-4">
             <div>
-              <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Affected Domain</p>
-              <p className="font-medium text-[#101B2C]">{alert.domain}</p>
-            </div>
-            <div>
-              <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Website</p>
-              <p className="font-medium text-[#101B2C]">{alert.website}</p>
+              <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Status</p>
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                alert.status === 'resolved'
+                  ? 'bg-[#22C55E]/10 text-[#22C55E]'
+                  : alert.status === 'read'
+                    ? 'bg-[#E2E8F0] text-[#718096]'
+                    : 'bg-[#36D6C4]/10 text-[#36D6C4]'
+              }`}>
+                {statusLabel}
+              </span>
             </div>
             <div>
               <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Severity</p>
-              <AlertSeverityBadge severity={alert.severity} />
+              <p className="font-medium text-[#101B2C]">{severity}</p>
             </div>
             <div>
-              <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Detection Date</p>
-              <p className="font-medium text-[#101B2C]">{alert.date} {alert.time}</p>
+              <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Business ID</p>
+              <p className="font-medium text-[#101B2C] font-mono">{alert.business_id}</p>
             </div>
-            <div className="col-span-2">
-              <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Category</p>
-              <p className="font-medium text-[#101B2C]">{alert.category}</p>
+            <div>
+              <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Asset ID</p>
+              <p className="font-medium text-[#101B2C] font-mono">{alert.asset_id}</p>
             </div>
-            <div className="col-span-2">
-              <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Status</p>
-              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
-                alert.read
-                  ? 'bg-[#E2E8F0] text-[#718096]'
-                  : 'bg-[#36D6C4]/10 text-[#36D6C4]'
-              }`}>
-                {alert.read ? 'Read' : 'Unread'}
-              </span>
+            <div>
+              <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Finding ID</p>
+              <p className="font-medium text-[#101B2C] font-mono">{alert.finding_id ?? '—'}</p>
             </div>
+            <div>
+              <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Detected At</p>
+              <p className="font-medium text-[#101B2C]">{created.toISOString().slice(0, 10)} {created.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: true })}</p>
+            </div>
+            {alert.read_at && (
+              <div>
+                <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Read At</p>
+                <p className="font-medium text-[#101B2C]">{new Date(alert.read_at).toISOString().slice(0, 10)}</p>
+              </div>
+            )}
+            {alert.resolved_at && (
+              <div>
+                <p className="text-xs font-medium text-[#718096] uppercase tracking-wider mb-1">Resolved At</p>
+                <p className="font-medium text-[#101B2C]">{new Date(alert.resolved_at).toISOString().slice(0, 10)}</p>
+              </div>
+            )}
           </div>
 
           <div className="space-y-5">
@@ -122,23 +162,7 @@ export function AlertDetails({ alert, onClose }: AlertDetailsProps) {
                 <FileText className="w-4 h-4 text-[#718096]" aria-hidden="true" />
                 <h3 className="font-medium text-[#101B2C]">Description</h3>
               </div>
-              <p className="text-sm text-[#718096] bg-[#F4F7FA] p-4 rounded-lg">{alert.description}</p>
-            </div>
-
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <AlertTriangle className="w-4 h-4 text-[#F2B84B]" aria-hidden="true" />
-                <h3 className="font-medium text-[#101B2C]">Potential Impact</h3>
-              </div>
-              <p className="text-sm text-[#718096] bg-[#FEFDF5] p-4 rounded-lg border border-[#F2B84B]/20">{alert.impact}</p>
-            </div>
-
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <Shield className="w-4 h-4 text-[#36D6C4]" aria-hidden="true" />
-                <h3 className="font-medium text-[#101B2C]">Recommended Remediation</h3>
-              </div>
-              <p className="text-sm text-[#718096] bg-[#F0FDF4] p-4 rounded-lg border border-[#36D6C4]/20">{alert.remediation}</p>
+              <p className="text-sm text-[#718096] bg-[#F4F7FA] p-4 rounded-lg">{alert.message}</p>
             </div>
           </div>
 
