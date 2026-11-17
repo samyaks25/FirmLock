@@ -6,6 +6,7 @@ live in this module. No secrets or credentials are stored in source code.
 """
 
 import os
+import warnings
 from pathlib import Path
 from typing import List
 
@@ -50,7 +51,32 @@ class Settings:
         # production. A default is provided only for local development.
         # Production deployments MUST use a strong secret (at least 32 bytes).
         self.jwt_secret: str = os.getenv("FIRMLOCK_JWT_SECRET", "dev-secret-change-in-production")
+
+        # Validate JWT secret strength
+        if self.environment == "production":
+            if not os.getenv("FIRMLOCK_JWT_SECRET"):
+                raise ValueError(
+                    "FIRMLOCK_JWT_SECRET must be set in production. "
+                    "Generate a strong secret with at least 32 characters."
+                )
+            if len(self.jwt_secret) < 32:
+                raise ValueError(
+                    "FIRMLOCK_JWT_SECRET must be at least 32 characters in production. "
+                    f"Current length: {len(self.jwt_secret)}."
+                )
+        elif len(self.jwt_secret) < 32:
+            # Development: warn but don't block startup
+            warnings.warn(
+                "FIRMLOCK_JWT_SECRET is less than 32 characters. "
+                "Use a strong secret (at least 32 bytes) in production.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        
+        # JWT algorithm - restricted to HS256 for security
+        # Algorithm substitution attacks are prevented by explicit validation
         self.jwt_algorithm: str = "HS256"
+        
         # Access token lifetime in minutes (default: 15 minutes).
         self.jwt_access_token_expire_minutes: int = int(
             os.getenv("FIRMLOCK_JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "15")

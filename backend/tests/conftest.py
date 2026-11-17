@@ -15,6 +15,8 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.login_protection import get_login_protection
+from app.core.rate_limit import get_rate_limiter
 from app.database import connection
 from app.database.connection import Base, get_db
 from app.main import app
@@ -33,6 +35,25 @@ def _run_alembic_upgrade(db_url: str) -> None:
 
     # Run upgrade head
     command.upgrade(alembic_cfg, "head")
+
+
+@pytest.fixture(scope="function", autouse=True)
+def reset_security_state() -> Generator[None, None, None]:
+    """Reset rate limiter and login protection state before each test."""
+    rate_limiter = get_rate_limiter()
+    login_protection = get_login_protection()
+
+    # Clear all rate limit windows
+    rate_limiter._windows.clear()
+
+    # Clear all login attempt tracking
+    login_protection._attempts.clear()
+
+    yield
+
+    # Clean up after test
+    rate_limiter._windows.clear()
+    login_protection._attempts.clear()
 
 
 @pytest.fixture(scope="function")

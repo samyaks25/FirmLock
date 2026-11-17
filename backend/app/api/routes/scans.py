@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.api.rate_limit import scan_rate_limit
 from app.database.connection import get_db
 from app.models.models import Asset, Scan, User
 from app.schemas.report import ScanReportResponse
@@ -28,6 +29,7 @@ router = APIRouter(tags=["Scans"])
     response_model=ScanAcceptedResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Start a security scan for an authorised asset",
+    dependencies=[Depends(scan_rate_limit)],
 )
 def start_scan(
     asset_id: int,

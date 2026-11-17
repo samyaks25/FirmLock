@@ -12,15 +12,19 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.rate_limit import add_rate_limit_headers
 from app.api.router import api_router
 from app.core.config import settings
+from app.core.errors import register_error_handlers
+from app.core.logging import get_logger, setup_secure_logging
+from app.core.request_size import RequestSizeLimitMiddleware, get_request_size_limit
+from app.core.security_headers import SecurityHeadersMiddleware, get_hsts_config
+from app.core.trusted_host import TrustedHostMiddleware, get_allowed_hosts
 from app.database.connection import check_migration_version
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
-logger = logging.getLogger("firmlock")
+# Configure secure logging with sensitive data redaction
+setup_secure_logging(level=logging.INFO if settings.environment == "production" else logging.DEBUG)
+logger = get_logger("firmlock")
 
 
 @asynccontextmanager
@@ -49,8 +53,27 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Explicitly allowed origins only. Credentials are allowed for these
-    # known local frontend origins, so no wildcard origin is used.
+    # Request size limiting (outermost - reject oversized requests early)
+    application.add_middleware(
+        RequestSizeLimitMiddleware,
+        max_size_bytes=get_request_size_limit(),
+    )
+
+    # Trusted host validation (validate Host header early)
+    application.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=get_allowed_hosts(),
+    )
+
+    # Security headers (add to all responses)
+    hsts_enabled, hsts_max_age = get_hsts_config()
+    application.add_middleware(
+        SecurityHeadersMiddleware,
+        hsts_enabled=hsts_enabled,
+        hsts_max_age=hsts_max_age,
+    )
+
+    # CORS (must be after security headers to allow credentials with explicit origins)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -59,16 +82,46 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Rate limit headers middleware (add headers to responses)
+    @application.middleware("http")
+    async def rate_limit_headers_middleware(request: Request, call_next):
+        response = await call_next(request)
+        add_rate_limit_headers(request, response)
+        return response
+
+    # Register consistent error handlers
+    register_error_handlers(application)
+
     @application.exception_handler(Exception)
     async def unhandled_exception_handler(
         request: Request, exc: Exception
     ) -> JSONResponse:
-        """Return a generic error response instead of leaking internals."""
-        logger.exception("Unhandled error for %s %s", request.method, request.url.path)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Internal server error"},
+        """Return a generic error response instead of leaking internals.
+
+        In production: log full exception with traceback, return generic message.
+        In development: include error details for debugging.
+        """
+        logger.exception(
+            "Unhandled error for %s %s",
+            request.method,
+            request.url.path,
         )
+
+        if settings.environment == "production":
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error"},
+            )
+        else:
+            # Development: include error type and message for debugging
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": "Internal server error",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
 
     @application.get("/", tags=["General"], summary="Welcome message")
     def read_root() -> Dict[str, str]:

@@ -1212,6 +1212,213 @@ All 234 existing tests pass with the new Alembic-based test fixtures:
 - **SQLite-only** — PostgreSQL/MySQL would require dialect-specific adjustments
 - **No automatic migration generation on model changes** — developers must run `alembic revision --autogenerate` manually
 
+## Stage 07B: API Security Hardening
+
+This stage implements comprehensive API security hardening to protect against
+common web application attacks and abuse.
+
+### Security improvements implemented
+
+| Area | Implementation |
+|------|----------------|
+| **Rate Limiting** | Configurable per-endpoint limits (login, register, scan, general API) with HTTP 429 and `Retry-After` headers |
+| **Login Brute-Force Protection** | Tracks failures per IP+email, temporary progressive lockouts, no account enumeration |
+| **Security Headers** | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, restrictive `Permissions-Policy`, appropriate `Cache-Control`, conditional HSTS |
+| **Trusted Host Validation** | Configurable allowed hosts, rejects unexpected `Host` headers, supports wildcards for subdomains |
+| **CORS Security** | Explicit origins only, no wildcard with credentials, preflight handling |
+| **Request Size Limits** | Configurable max body size (default 10 MB), HTTP 413 for oversized requests, CSV downloads exempt |
+| **JWT Hardening** | HS256 explicitly enforced, algorithm confusion prevention, issuer/audience validation, secret strength warning in production |
+| **Error Handling** | No stack traces in production, consistent error responses, sensitive data redaction from logs |
+| **Secure Logging** | Automatic redaction of passwords, JWTs, Authorization headers, database credentials, API keys |
+
+### New modules
+
+| Module | Purpose |
+|--------|---------|
+| `app/core/rate_limit.py` | In-memory rate limiter with sliding window (dev/single-process) |
+| `app/core/login_protection.py` | Brute-force protection with IP+email tracking |
+| `app/core/security_headers.py` | Security headers middleware |
+| `app/core/trusted_host.py` | Trusted host validation middleware |
+| `app/core/request_size.py` | Request body size limiting middleware |
+| `app/core/logging.py` | Secure logging with sensitive data redaction |
+| `app/core/errors.py` | Consistent error response handlers |
+| `app/api/rate_limit.py` | Rate limit dependencies for endpoints |
+
+### Rate-limiting configuration
+
+All rate limits are configurable via environment variables using the format `requests:window_seconds`:
+
+| Variable | Default | Endpoint |
+|---|---|---|
+| `FIRMLOCK_RATE_LIMIT_LOGIN` | `5:300` | `/api/auth/login` (5 req/5 min) |
+| `FIRMLOCK_RATE_LIMIT_REGISTER` | `3:3600` | `/api/auth/register` (3 req/hour) |
+| `FIRMLOCK_RATE_LIMIT_SCAN` | `10:3600` | `/api/assets/{id}/scan` (10 req/hour) |
+| `FIRMLOCK_RATE_LIMIT_GENERAL` | `100:60` | General API (100 req/min) |
+| `FIRMLOCK_RATE_LIMIT_AUTHENTICATED` | `200:60` | Authenticated endpoints per user (200 req/min) |
+
+**Multi-process limitation:** The in-memory rate limiter is suitable for local development and single-process deployments only. In multi-worker deployments (e.g., gunicorn with multiple workers), each worker maintains its own counters, effectively multiplying the limits. For production multi-process deployments, replace with a shared backend (Redis, Memcached, or database).
+
+### Login brute-force protection configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FIRMLOCK_LOGIN_MAX_FAILURES` | `5` | Failures before lockout |
+| `FIRMLOCK_LOGIN_LOCKOUT_SECONDS` | `300` | Base lockout duration (5 min) |
+| `FIRMLOCK_LOGIN_WINDOW_SECONDS` | `900` | Tracking window (15 min) |
+| `FIRMLOCK_LOGIN_MAX_LOCKOUT_SECONDS` | `3600` | Maximum lockout duration (1 hour) |
+
+Key properties:
+- Tracks failures per **IP + email** combination (prevents cross-user lockout)
+- Uses generic error messages to avoid email enumeration
+- Progressive lockout: duration increases with repeated attacks, capped at max
+- Successful login resets failure tracking for that IP+email
+- Never permanently locks accounts
+
+### Security headers
+
+Applied to all responses:
+
+| Header | Value |
+|--------|-------|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `no-referrer` |
+| `Permissions-Policy` | `accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()` |
+| `Cache-Control` (auth/sensitive) | `no-store, no-cache, must-revalidate, private` |
+| `Cache-Control` (API GET) | `private, max-age=0, must-revalidate` |
+| `Strict-Transport-Security` | Only when `FIRMLOCK_HSTS_ENABLED=true` and HTTPS |
+
+### Trusted host configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FIRMLOCK_ALLOWED_HOSTS` | `` (empty) | Comma-separated allowed hostnames |
+| `FIRMLOCK_TRUSTED_PROXIES` | `` (empty) | Comma-separated trusted proxy IPs |
+
+In development, `localhost`, `127.0.0.1` and common dev ports are automatically allowed.
+Supports wildcard subdomains (e.g., `*.example.com`).
+
+### Request size limits
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FIRMLOCK_MAX_REQUEST_SIZE_MB` | `10` | Maximum request body size in MB |
+
+CSV report downloads (`/api/scans/{id}/report.csv`) are exempt from size limits.
+
+### JWT security configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FIRMLOCK_JWT_SECRET` | **required** | HS256 signing key (min 32 chars recommended) |
+| `FIRMLOCK_JWT_ALGORITHM` | `HS256` | Fixed to HS256 (not configurable for security) |
+| `FIRMLOCK_JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | Access token lifetime |
+| `FIRMLOCK_JWT_ISSUER` | `firmlock` | JWT issuer claim |
+| `FIRMLOCK_JWT_AUDIENCE` | `firmlock-api` | JWT audience claim |
+
+Security features:
+- Algorithm explicitly restricted to HS256 (prevents algorithm confusion)
+- Issuer and audience validated on every decode
+- Expiry (`exp`) and issued-at (`iat`) validated
+- Production warning if secret < 32 characters
+- Tokens never logged (redacted by logging filter)
+
+### Proxy configuration
+
+When operating behind a reverse proxy (nginx, Cloudflare, etc.):
+
+```env
+FIRMLOCK_TRUSTED_PROXIES=10.0.0.1,10.0.0.2
+```
+
+The application will:
+- Extract real client IP from `X-Forwarded-For` (skipping trusted proxies)
+- Use `X-Real-IP` as fallback
+- Apply rate limits and login protection based on real client IP
+
+**Never trust arbitrary forwarded headers** — only configure explicitly trusted proxies.
+
+### Error handling
+
+- **Production:** Generic error messages (`{"detail": "Internal server error"}`)
+- **Development:** Detailed errors with type and message for debugging
+- **Consistent format:** All errors include `detail`, `error_code`, and optionally `error_type`
+- **No stack traces** returned to clients in production
+- **Sensitive data redacted** from all log output
+
+### Secure logging
+
+The logging filter automatically redacts:
+- Passwords (`password`, `hashed_password`)
+- JWT tokens (`access_token`, `Authorization: Bearer ...`)
+- Database connection strings with credentials
+- API keys and secrets (`secret`, `api_key`, `api-key`)
+
+### Production security limitations
+
+| Limitation | Details |
+|---|---|
+| **In-memory rate limiting** | Not shared across processes; use Redis for multi-worker |
+| **SQLite database** | Not suited for concurrent multi-user production |
+| **No audit logging** | Security events not persisted for compliance |
+| **No CSRF protection** | API uses Bearer tokens; CSRF not applicable but consider for browser clients |
+| **Single-process scan concurrency** | Semaphore-based; not suitable for multi-worker without external coordination |
+| **HSTS only with HTTPS** | Must be explicitly enabled and used behind TLS termination |
+
+### Testing
+
+Run the full test suite including 39 new security tests:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+**Total: 273 tests** (234 existing + 39 security)
+
+Security test coverage:
+- Rate-limit enforcement and HTTP 429 responses
+- Login throttling and account enumeration protection
+- Security response headers verification
+- Invalid Host header rejection
+- CORS restrictions
+- Oversized request rejection (HTTP 413)
+- JWT signature, expiry, algorithm, issuer/audience validation
+- Missing authentication handling
+- Cross-business access attempts
+- Sensitive information leakage prevention
+- Regression tests for existing functionality
+
+### New dependencies
+
+No new production dependencies — all security features implemented with existing packages:
+- `fastapi`, `starlette` — middleware, dependencies, test client
+- `python-jose` — JWT algorithm validation
+- `passlib`, `argon2-cffi` — password hashing
+- Standard library — `threading`, `time`, `re`, `dataclasses`
+
+### Files created/modified
+
+**Created:**
+- `app/core/rate_limit.py`
+- `app/core/login_protection.py`
+- `app/core/security_headers.py`
+- `app/core/trusted_host.py`
+- `app/core/request_size.py`
+- `app/core/logging.py`
+- `app/core/errors.py`
+- `app/api/rate_limit.py`
+- `tests/test_security.py`
+
+**Modified:**
+- `app/main.py` — middleware stack, error handlers
+- `app/core/config.py` — JWT secret validation, new env vars
+- `app/core/auth.py` — algorithm restriction, explicit validation options
+- `app/services/auth_service.py` — login protection integration
+- `app/api/routes/auth.py` — rate limits, brute-force protection
+- `app/api/routes/scans.py` — scan rate limit
+- `tests/conftest.py` — security state reset fixture
+
 ## Out of scope (future stages)
 
 Payment systems, email/SMS notifications, scheduled/automated monitoring, PDF reports, machine learning, and frontend modifications are intentionally not implemented.
