@@ -9,9 +9,11 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -119,6 +121,12 @@ class Scan(Base):
     findings: Mapped[List["Finding"]] = relationship(
         "Finding", back_populates="scan", passive_deletes=True
     )
+    check_results: Mapped[List["CheckResult"]] = relationship(
+        "CheckResult", back_populates="scan", passive_deletes=True
+    )
+    risk_assessment: Mapped[Optional["RiskAssessment"]] = relationship(
+        "RiskAssessment", back_populates="scan", uselist=False, passive_deletes=True
+    )
 
 
 class Finding(Base):
@@ -150,6 +158,103 @@ class Finding(Base):
     alerts: Mapped[List["Alert"]] = relationship(
         "Alert", back_populates="finding", passive_deletes=True
     )
+    check_results: Mapped[List["CheckResult"]] = relationship(
+        "CheckResult", back_populates="finding", passive_deletes=True
+    )
+
+
+class CheckResult(Base):
+    """Explicit outcome of one scanner check for one scan.
+
+    Findings describe *problems*. A check result records the outcome of every
+    expected check, including checks that passed and checks that could not be
+    evaluated (``unknown``). This is what lets the risk engine calculate
+    coverage and distinguish a security finding from a technical scanning
+    failure.
+    """
+
+    __tablename__ = "check_results"
+    __table_args__ = (
+        UniqueConstraint("scan_id", "check_id", name="uq_check_result_scan_check"),
+        CheckConstraint(
+            "outcome IN ('passed', 'failed', 'unknown', 'not_applicable')",
+            name="ck_check_result_outcome",
+        ),
+        Index("ix_check_results_scan_id", "scan_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_id: Mapped[int] = mapped_column(
+        ForeignKey("scans.id", ondelete="RESTRICT"), nullable=False
+    )
+    check_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    module: Mapped[str] = mapped_column(String(30), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)
+    severity: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    check_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    finding_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("findings.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    scan: Mapped["Scan"] = relationship("Scan", back_populates="check_results")
+    finding: Mapped[Optional["Finding"]] = relationship(
+        "Finding", back_populates="check_results"
+    )
+
+
+class RiskAssessment(Base):
+    """Persisted risk assessment snapshot for a completed scan.
+
+    A snapshot is written once and never overwritten, so historical security
+    scores and their explanations remain stable even if the scoring
+    configuration changes later.
+    """
+
+    __tablename__ = "risk_assessments"
+    __table_args__ = (
+        UniqueConstraint("scan_id", name="uq_risk_assessment_scan"),
+        CheckConstraint(
+            "security_score IS NULL OR (security_score >= 0 AND security_score <= 100)",
+            name="ck_risk_assessment_score_range",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_id: Mapped[int] = mapped_column(
+        ForeignKey("scans.id", ondelete="RESTRICT"), nullable=False
+    )
+    security_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    risk_level: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    grade: Mapped[Optional[str]] = mapped_column(String(2), nullable=True)
+    coverage_percent: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    checks_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    checks_evaluated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    checks_unknown: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    checks_not_applicable: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    coverage_sufficient: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    coverage_unknown_checks: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    findings_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    severity_counts: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    deductions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    highest_priority: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    recommendations: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    score_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    unavailable_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    score_source: Mapped[str] = mapped_column(String(20), nullable=False, default="calculated")
+    risk_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+    scan: Mapped["Scan"] = relationship("Scan", back_populates="risk_assessment")
 
 
 class Alert(Base):

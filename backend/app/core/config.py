@@ -45,5 +45,30 @@ class Settings:
             "FIRMLOCK_DATABASE_URL", f"sqlite:///{default_db_path.as_posix()}"
         )
 
+        # --- Risk scoring configuration ---------------------------------
+        # Penalty weights are configurable so that the scoring model can be
+        # tuned without code changes. Values are clamped to non-negative
+        # integers by the risk configuration dataclass.
+        self.score_penalty_critical: int = int(
+            os.getenv("FIRMLOCK_SCORE_PENALTY_CRITICAL", "25")
+        )
+        self.score_penalty_high: int = int(
+            os.getenv("FIRMLOCK_SCORE_PENALTY_HIGH", "15")
+        )
+        self.score_penalty_medium: int = int(
+            os.getenv("FIRMLOCK_SCORE_PENALTY_MEDIUM", "8")
+        )
+        self.score_penalty_low: int = int(
+            os.getenv("FIRMLOCK_SCORE_PENALTY_LOW", "3")
+        )
+        self.score_penalty_info: int = int(
+            os.getenv("FIRMLOCK_SCORE_PENALTY_INFO", "0")
+        )
+        # Minimum percentage of checks that must be conclusively evaluated
+        # before a numerical security score is displayed.
+        self.risk_min_coverage_percent: float = float(
+            os.getenv("FIRMLOCK_RISK_MIN_COVERAGE_PERCENT", "80")
+        )
+
 
 settings = Settings()
