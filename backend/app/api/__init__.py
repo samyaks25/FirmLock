@@ -1,0 +1,1 @@
+"""API package: HTTP layer components (routers, dependencies)."""
