@@ -36,8 +36,8 @@ export function Onboarding() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F4F7FA] md:ml-64">
-      <div className="p-4 md:p-6 md:ml-20">
+    <div className="min-h-screen bg-[#F4F7FA]">
+      <div className="p-4 md:p-6">
         <div className="max-w-md mx-auto">
           <div className="flex items-center gap-2 mb-6">
             <Building className="w-6 h-6 text-[#36D6C4]" aria-hidden="true" />

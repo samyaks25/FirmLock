@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   LayoutDashboard,
   Server,
@@ -25,59 +24,78 @@ const navItems: NavItem[] = [
   { label: 'Settings', href: '/settings', icon: Settings },
 ];
 
-export function Sidebar({ onNavigate }: { onNavigate: (path: string) => void }) {
-  const [collapsed, setCollapsed] = useState(false);
+interface SidebarProps {
+  onNavigate: (path: string) => void;
+  collapsed: boolean;
+  onToggle: () => void;
+}
 
+export function Sidebar({ onNavigate, collapsed, onToggle }: SidebarProps) {
   return (
     <aside
-      className={`fixed left-0 top-0 h-screen bg-[#101B2C] text-white transition-all duration-300 z-50 ${
-        collapsed ? 'w-32' : 'w-64'
+      className={`fixed left-0 top-0 h-screen bg-[#101B2C] text-white transition-all duration-300 z-50 overflow-hidden ${
+        collapsed ? 'w-20' : 'w-64'
       }`}
       aria-label="Main navigation"
     >
       <div className="flex flex-col h-full">
-        <div className={`flex items-center justify-between h-16 ${collapsed ? 'px-3' : 'px-4'} border-b border-white/10`}>
-          <div className={`flex items-center gap-2 ${collapsed ? 'flex-col' : 'flex-row'}`}>
+        <div
+          className={`relative border-b border-white/10 ${
+            collapsed
+              ? 'flex flex-col items-center justify-center px-2 pt-6 pb-2 min-h-[96px]'
+              : 'flex items-center justify-between px-4 py-3 h-16'
+          }`}
+        >
+          <div
+            className={`flex items-center ${
+              collapsed ? 'flex-col gap-1' : 'flex-row gap-2'
+            }`}
+          >
             <img
               src="/firmlock-logo.png"
               alt="FirmLock"
-              className="w-8 h-8 flex-shrink-0"
+              className={`flex-shrink-0 ${collapsed ? 'w-7 h-7' : 'w-8 h-8'}`}
             />
-            <span className={`font-semibold tracking-tight flex-shrink-0 ${collapsed ? 'text-xs leading-none hidden' : 'text-lg'}`}>
+            <span
+              className={`font-semibold tracking-tight ${
+                collapsed ? 'text-[10px] leading-tight text-center' : 'text-lg'
+              }`}
+            >
               FirmLock
             </span>
           </div>
           <button
-            onClick={() => setCollapsed(!collapsed)}
-            className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/70 hover:text-white"
+            onClick={onToggle}
+            className={`rounded-lg hover:bg-white/10 transition-colors text-white/70 hover:text-white ${
+              collapsed ? 'absolute right-1 top-1 p-1' : 'p-2'
+            }`}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             aria-expanded={!collapsed}
           >
             {collapsed ? (
-              <ChevronRight className="w-5 h-5" aria-hidden="true" />
+              <ChevronRight className="w-4 h-4" aria-hidden="true" />
             ) : (
               <ChevronLeft className="w-5 h-5" aria-hidden="true" />
             )}
           </button>
         </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto" aria-label="Navigation">
+        <nav
+          className="flex-1 px-2 py-4 space-y-1 overflow-y-auto"
+          aria-label="Navigation"
+        >
           {navItems.map((item) => (
             <button
               key={item.href}
               onClick={() => onNavigate(item.href)}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-                collapsed
-                  ? 'justify-center'
-                  : 'justify-start'
+                collapsed ? 'justify-center px-0' : 'justify-start'
               }`}
               aria-label={item.label}
               title={collapsed ? item.label : undefined}
             >
               <item.icon
-                className={`w-5 h-5 flex-shrink-0 ${
-                  collapsed ? 'mx-auto' : ''
-                }`}
+                className="w-5 h-5 flex-shrink-0"
                 aria-hidden="true"
               />
               {!collapsed && <span>{item.label}</span>}

@@ -14,6 +14,7 @@ import { useAuth } from './auth/AuthContext';
 function AppShell() {
   const { user, token, business, businessId, loading, logout } = useAuth();
   const [route, setRoute] = useState('/');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const handleNavigate = (path: string) => setRoute(path);
 
@@ -46,16 +47,26 @@ function AppShell() {
 
   return (
     <div className="min-h-screen bg-[#F4F7FA]">
-      <Sidebar onNavigate={handleNavigate} />
-      <Header
-        title={page}
-        description={desc}
-        onMenuClick={() => {}}
-        user={user}
-        business={business}
-        onSignOut={logout}
+      <Sidebar
+        onNavigate={handleNavigate}
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed((v) => !v)}
       />
-      {needsOnboarding ? <Onboarding /> : isAssets ? <MyAssets /> : isScans ? <SecurityScans /> : isAlerts ? <Alerts /> : isReports ? <Reports /> : <Dashboard />}
+      <div
+        className={`min-h-screen transition-all duration-300 ${
+          sidebarCollapsed ? 'md:ml-20' : 'md:ml-64'
+        }`}
+      >
+        <Header
+          title={page}
+          description={desc}
+          onMenuClick={() => {}}
+          user={user}
+          business={business}
+          onSignOut={logout}
+        />
+        {needsOnboarding ? <Onboarding /> : isAssets ? <MyAssets /> : isScans ? <SecurityScans /> : isAlerts ? <Alerts /> : isReports ? <Reports /> : <Dashboard />}
+      </div>
     </div>
   );
 }

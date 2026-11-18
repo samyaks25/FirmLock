@@ -76,8 +76,8 @@ export function MyAssets() {
 
   if (!businessId) {
     return (
-      <div className="min-h-screen bg-[#F4F7FA] md:ml-64">
-        <div className="p-4 md:p-6 md:ml-20">
+      <div className="min-h-screen bg-[#F4F7FA]">
+        <div className="p-4 md:p-6">
           <h1 className="text-2xl font-semibold text-[#101B2C]">My Assets</h1>
           <p className="text-sm text-[#718096] mb-6">No business selected. Please select or create a business to manage assets.</p>
         </div>
@@ -87,8 +87,7 @@ export function MyAssets() {
 
   return (
     <div className="min-h-screen bg-[#F4F7FA]">
-      <div className="md:ml-64">
-        <div className="p-4 md:p-6 md:ml-20 transition-all duration-300">
+      <div className="p-4 md:p-6">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
               <h1 className="text-2xl font-semibold text-[#101B2C]">My Assets</h1>
@@ -130,7 +129,6 @@ export function MyAssets() {
 
           {scanning !== null && <p className="mt-4 text-sm text-[#718096]">Scan started for selected asset.</p>}
 
-        </div>
       </div>
 
       <AddAssetModal open={modalOpen} onClose={() => setModalOpen(false)} onAdd={addWebsite} />

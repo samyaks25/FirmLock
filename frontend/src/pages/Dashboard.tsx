@@ -145,17 +145,7 @@ export function Dashboard() {
 
   return (
     <div className="min-h-screen bg-[#F4F7FA]">
-      <div className="md:ml-64">
-        <header className="md:ml-20 transition-all duration-300">
-          <div className="flex items-center justify-between h-16 px-4 md:px-6">
-            <div>
-              <h1 className="text-xl font-semibold text-[#101B2C]">Dashboard</h1>
-              <p className="text-sm text-[#718096]">Security posture overview and recent activity</p>
-            </div>
-          </div>
-        </header>
-
-        <main className="p-4 md:p-6 md:ml-20 transition-all duration-300">
+      <main className="p-4 md:p-6">
           {error && <div className="mb-4 p-3 rounded-lg bg-[#FEF2F2] border border-[#EF4444]/30 text-sm text-[#EF4444]">{error}</div>}
           {!data && !error && loading && <p className="text-[#718096] mb-4">Loading dashboard...</p>}
 
@@ -220,8 +210,7 @@ export function Dashboard() {
               </div>
             </>
           )}
-        </main>
-      </div>
+      </main>
     </div>
   );
 }

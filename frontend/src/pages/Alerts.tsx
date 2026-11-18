@@ -113,8 +113,8 @@ export function Alerts() {
 
   if (!businessId) {
     return (
-      <div className="min-h-screen bg-[#F4F7FA] md:ml-64">
-        <div className="p-4 md:p-6 md:ml-20">
+      <div className="min-h-screen bg-[#F4F7FA]">
+        <div className="p-4 md:p-6">
           <h1 className="text-2xl font-semibold text-[#101B2C]">Alerts & Notifications</h1>
           <p className="text-sm text-[#718096] mb-6">No business selected. Please select or create a business to view alerts.</p>
         </div>
@@ -124,8 +124,7 @@ export function Alerts() {
 
   return (
     <div className="min-h-screen bg-[#F4F7FA]">
-      <div className="md:ml-64">
-        <div className="p-4 md:p-6 md:ml-20 transition-all duration-300">
+      <div className="p-4 md:p-6">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div>
               <h1 className="text-2xl font-semibold text-[#101B2C]">Alerts & Notifications</h1>
@@ -197,7 +196,6 @@ export function Alerts() {
           <p className="text-center text-sm text-[#718096] mt-8 pb-8">
             Alerts are fetched from the FirmLock API for your selected business.
           </p>
-        </div>
       </div>
 
       {selectedAlert && (
