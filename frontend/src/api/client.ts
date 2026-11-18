@@ -177,6 +177,6 @@ export const alertsApi = {
 export const reportsApi = {
   assetReports: (assetId: number) =>
     api.get<AssetReportsResponse>(`/api/assets/${assetId}/reports`),
-  scanReport: (scanId: number) => api.get<ScanReportResponse>(`/api/scans/${scanId}`),
+  scanReport: (scanId: number) => api.get<ScanReportResponse>(`/api/scans/${scanId}/report`),
   scanReportCsv: (scanId: number) => api.get<string>(`/api/scans/${scanId}/report.csv`),
 };

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Lock, Mail, AlertCircle } from 'lucide-react';
+import { Mail, Lock, AlertCircle } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { api, setToken } from '../api/client';
 import type { UserLogin } from '../types/backend';
@@ -39,7 +39,11 @@ export function Login() {
       <div className="w-full max-w-md p-6">
         <div className="bg-white rounded-xl border border-[#E2E8F0] p-8 md:p-10 shadow-sm">
           <div className="flex items-center gap-2 mb-6">
-            <Lock className="w-6 h-6 text-[#36D6C4]" aria-hidden="true" />
+            <img
+              src="/firmlock-logo.png"
+              alt="FirmLock"
+              className="w-6 h-6"
+            />
             <h2 className="text-xl font-semibold text-[#101B2C]">Sign in to FirmLock</h2>
           </div>
           <p className="text-sm text-[#718096] mb-6">Enter your email and password to access your security dashboard.</p>

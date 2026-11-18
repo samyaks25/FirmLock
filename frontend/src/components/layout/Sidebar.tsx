@@ -8,7 +8,6 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
-  Lock,
 } from 'lucide-react';
 
 interface NavItem {
@@ -32,20 +31,22 @@ export function Sidebar({ onNavigate }: { onNavigate: (path: string) => void }) 
   return (
     <aside
       className={`fixed left-0 top-0 h-screen bg-[#101B2C] text-white transition-all duration-300 z-50 ${
-        collapsed ? 'w-20' : 'w-64'
+        collapsed ? 'w-32' : 'w-64'
       }`}
       aria-label="Main navigation"
     >
       <div className="flex flex-col h-full">
-        <div className="flex items-center justify-between h-16 px-4 border-b border-white/10">
-          {!collapsed && (
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-[#36D6C4] flex items-center justify-center">
-                <Lock className="w-5 h-5 text-[#101B2C]" aria-hidden="true" />
-              </div>
-              <span className="font-semibold text-lg tracking-tight">FirmLock</span>
-            </div>
-          )}
+        <div className={`flex items-center justify-between h-16 ${collapsed ? 'px-3' : 'px-4'} border-b border-white/10`}>
+          <div className={`flex items-center gap-2 ${collapsed ? 'flex-col' : 'flex-row'}`}>
+            <img
+              src="/firmlock-logo.png"
+              alt="FirmLock"
+              className="w-8 h-8 flex-shrink-0"
+            />
+            <span className={`font-semibold tracking-tight flex-shrink-0 ${collapsed ? 'text-xs leading-none hidden' : 'text-lg'}`}>
+              FirmLock
+            </span>
+          </div>
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="p-2 rounded-lg hover:bg-white/10 transition-colors text-white/70 hover:text-white"

@@ -24,6 +24,7 @@ export function Reports() {
   const [selectedReport, setSelectedReport] = useState<ScanReportResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
@@ -69,15 +70,22 @@ export function Reports() {
 
   const handleView = async (scanId: number) => {
     setReportLoading(true);
-    setError(null);
+    setReportError(null);
+    setSelectedReport(null);
     try {
       const report = await reportsApi.scanReport(scanId);
       setSelectedReport(report);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load report.');
+      setReportError(err instanceof Error ? err.message : 'Failed to load report.');
     } finally {
       setReportLoading(false);
     }
+  };
+
+  const handleCloseReport = () => {
+    setSelectedReport(null);
+    setReportError(null);
+    setReportLoading(false);
   };
 
   const handleDownloadCsv = async (scanId: number) => {
@@ -170,11 +178,12 @@ export function Reports() {
         </div>
       </div>
 
-      {selectedReport && (
+      {(selectedReport || reportLoading || reportError) && (
         <ReportDetails
           report={selectedReport}
-          onClose={() => setSelectedReport(null)}
+          onClose={handleCloseReport}
           loading={reportLoading}
+          error={reportError}
           onDownloadCsv={handleDownloadCsv}
         />
       )}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Lock, Mail, User, AlertCircle, ArrowLeft } from 'lucide-react';
+import { Mail, User, Lock, AlertCircle, ArrowLeft } from 'lucide-react';
 import { api } from '../api/client';
 import type { UserCreate } from '../types/backend';
 
@@ -34,7 +34,11 @@ export function Register() {
             <span className="text-sm text-[#718096]">Back to sign in</span>
           </div>
           <div className="flex items-center gap-2 mt-2 mb-6">
-            <User className="w-6 h-6 text-[#36D6C4]" aria-hidden="true" />
+            <img
+              src="/firmlock-logo.png"
+              alt="FirmLock"
+              className="w-6 h-6"
+            />
             <h2 className="text-xl font-semibold text-[#101B2C]">Create your FirmLock account</h2>
           </div>
           <p className="text-sm text-[#718096] mb-6">Join your organisation and start monitoring your websites.</p>
